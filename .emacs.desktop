@@ -1,0 +1,55 @@
+;; -*- mode: emacs-lisp; coding: emacs-mule; -*-
+;; --------------------------------------------------------------------------
+;; Desktop File for Emacs
+;; --------------------------------------------------------------------------
+;; Created Thu Oct 25 13:20:31 2018
+;; Desktop file format version 208
+;; Emacs version 26.1
+
+;; Global section:
+(setq desktop-saved-frameset [frameset 1 (23505 39151 3868 92000) (desktop . "208") "pierbezuhoff@pierbezuhoffG3" nil nil ((((minibuffer . t) (undecorated) (override-redirect) (font-backend xft x) (font . "-PfEd-DejaVu Sans Mono-normal-normal-normal-*-23-*-*-*-m-0-iso10646-1") (font-parameter . "Monospace 14") (border-width . 0) (internal-border-width . 0) (right-divider-width . 0) (bottom-divider-width . 0) (vertical-scroll-bars) (horizontal-scroll-bars) (foreground-color . "#f6f3e8") (background-color . "#242424") (mouse-color . "black") (border-color . "black") (screen-gamma) (line-spacing) (left-fringe . 8) (right-fringe . 8) (no-special-glyphs) (scroll-bar-foreground) (scroll-bar-background) (menu-bar-lines . 0) (tool-bar-lines . 0) (title) (wait-for-wm . t) (tool-bar-position . top) (inhibit-double-buffering) (icon-type . t) (auto-raise) (auto-lower) (cursor-type . box) (scroll-bar-width . 0) (scroll-bar-height . 0) (alpha) (no-focus-on-map) (no-accept-focus) (fullscreen . maximized) (visibility . t) (skip-taskbar) (z-group) (display-type . color) (background-mode . dark) (cursor-color . "#656565") (sticky) (environment) (frameset--id . "9537-D642-14D6-4DFD") (frameset--mini t . t) (modeline . t) (unsplittable) (icon-name) (display . ":1") (explicit-name) (height . 36) (width . 136) (left + -1) (top . 33)) ((min-height . 4) (min-width . 10) (min-height-ignore . 2) (min-width-ignore . 4) (min-height-safe . 1) (min-width-safe . 2) (min-pixel-height . 112) (min-pixel-width . 140) (min-pixel-height-ignore . 56) (min-pixel-width-ignore . 56) (min-pixel-height-safe . 28) (min-pixel-width-safe . 28)) leaf (pixel-width . 1920) (pixel-height . 980) (total-width . 137) (total-height . 35) (normal-height . 1.0) (normal-width . 1.0) (buffer "Parser.hs" (selected . t) (hscroll . 0) (fringes 8 8 nil) (margins nil) (scroll-bars nil 0 t nil 0 t) (vscroll . 0) (dedicated) (point . 2398) (start . 1635))))])
+(setq desktop-missing-file-warning nil)
+(setq tags-file-name nil)
+(setq tags-table-list nil)
+(setq search-ring '("M-s" "(" "S" "]"))
+(setq regexp-search-ring nil)
+(setq register-alist nil)
+(setq file-name-history '("~/Programming/Haskell/formula-evaluator/" "/home/pierbezuhoff/.ghci"))
+
+;; Buffer section -- buffers listed in same order as in buffer list:
+(desktop-create-buffer 208
+  "/home/pierbezuhoff/Programming/Haskell/formula-evaluator/src/Parser.hs"
+  "Parser.hs"
+  'haskell-mode
+  '(eldoc-mode company-mode flycheck-mode intero-mode)
+  2398
+  '(849 nil)
+  nil
+  nil
+  '((tab-width . 8) (indent-tabs-mode) (buffer-display-time 23505 39142 376374 984000) (buffer-file-coding-system . undecided-unix))
+  '((mark-ring (820 786 687))))
+
+(desktop-create-buffer 208
+  nil
+  "src"
+  'dired-mode
+  nil
+  333
+  '(nil nil)
+  t
+  '("/home/pierbezuhoff/Programming/Haskell/formula-evaluator/src/")
+  '((buffer-display-time 23505 33156 202386 800000))
+  '((mark-ring nil)))
+
+(desktop-create-buffer 208
+  nil
+  "formula-evaluator"
+  'dired-mode
+  nil
+  844
+  '(nil nil)
+  t
+  '("/home/pierbezuhoff/Programming/Haskell/formula-evaluator/")
+  '((buffer-display-time 23505 33146 605372 605000))
+  '((mark-ring nil)))
+
