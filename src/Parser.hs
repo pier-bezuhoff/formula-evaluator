@@ -2,11 +2,9 @@
 {-# LANGUAGE PatternSynonyms, ViewPatterns, PatternGuards #-}
 module Parser where
 
-import Data.Char
 import Data.List (intercalate)
 import Data.Bits (xor)
-import Data.Maybe
-import Control.Applicative
+import Data.Maybe (fromMaybe)
 import Control.Arrow ((&&&))
 import Control.Monad
 import Text.Read (readMaybe)
@@ -41,8 +39,8 @@ instance WithDefaults Bool where
 
 -- TODO: associativity!
 type Precedence = Int -- [2..9]
-data Fixity = Infix Precedence | Prefix Arity deriving (Show, Eq, Ord) -- Infix -> arity == 2
 type Arity = Int -- [1..]
+data Fixity = Infix Precedence | Prefix Arity deriving (Show, Eq, Ord) -- Infix -> arity == 2
 type Name = String
 
 data Op x y = Op { name :: Name, fun :: [x] -> y, fixity :: Fixity }
@@ -57,6 +55,7 @@ opPrecedence :: Op x y -> Precedence
 opPrecedence op = case fixity op of
   Infix n -> n
   Prefix _ -> 10
+
 listify1 ab [a] = ab a
 listify2 abc [a,b] = abc a b
 listify3 abcd [a,b,c] = abcd a b c
