@@ -4,10 +4,12 @@ module Parser where
 
 import Data.List (intercalate)
 import Data.Bits (xor)
-import Data.Maybe (fromMaybe)
-import Control.Arrow ((&&&))
-import Control.Monad
 import Text.Read (readMaybe)
+import Control.Arrow ((&&&))
+import Data.Maybe
+import Data.List
+import Control.Monad
+import Control.Monad.State
 import qualified Data.Map as M
 
 data Expr x = Val x | Var Name | Expr (ExprOp x) [Expr x] deriving (Eq)
@@ -16,13 +18,13 @@ instance Show x => Show (Expr x) where
     Val x -> show x
     Var name -> name
     Expr op exprs -> "(" ++ show op ++ " " ++ intercalate " " (map show exprs) ++ ")"
-eval :: Expr x -> M.Map Name x -> Maybe x
-eval (Val x) _  = Just x
-eval (Var x) m = M.lookup x m
-eval (Expr op xs) m = fun op <$> traverse (`eval` m) xs
-eval_ = (`eval` mempty)
+eval :: M.Map Name x -> Expr x -> Maybe x
+eval _ (Val x)  = Just x
+eval m (Var x) = M.lookup x m
+eval m (Expr op xs) = fun op <$> traverse (eval m) xs
+eval_ = eval mempty
 eval' :: WithDefaults x => Expr x -> Maybe x
-eval' = (`eval` defaults)
+eval' = eval defaults
 class Parse x => WithDefaults x where defaults :: M.Map Name x
 instance WithDefaults Double where
   defaults = M.fromList [
@@ -81,6 +83,7 @@ instance Ops Double where
     binop "*" (*) 7,
     binop "/" (/) 7,
     binopR "^" (**) 8,
+    funop "sqrt" sqrt,
     funop "~" negate,
     funop "sin" sin,
     funop "sinh" sinh,
@@ -224,13 +227,38 @@ parseRPN = go [] . words where
               1 -> let (a:xs) = stack in go (Expr op [a] : xs) rest
               2 -> let (b:a:xs) = stack in go (Expr op [a,b] : xs) rest
               3 -> let (c:b:a:xs) = stack in go (Expr op [a,b,c] : xs) rest
+              arity -> error $ "unexpected arity: " ++ show arity
 
 parseS :: Parse x => String -> Maybe (Expr x)
 parseS = undefined
 
-evalFile :: String -> IO ()
-evalFile = undefined
-{-
-x = expr => add to vars map
-expr => println
--}
+evalFile :: FilePath -> IO ()
+evalFile filename = void $ runStateT (process @Double) defaults where
+  reportParseError s = putStrLn $ "ERROR: Failed to parse expression:" ++ s
+  reportEvalError s expr = putStrLn $ "ERROR: Failed to evaluate expression:" ++ s ++ "\n(parsed as " ++ show (fromJust expr) ++ ")"
+  processStatement :: (Show t, WithDefaults t) => M.Map Name t -> String -> StateT (M.Map Name t) IO ()
+  processStatement m statement = do
+    let ws = words statement
+    if length ws > 2 && ws !! 1 == "="
+      then let
+        s = drop (2 + fromJust (findIndex (== '=') statement)) statement
+        expr = parse s
+        answer = eval m =<< expr
+        in if isNothing expr then liftIO $ reportParseError s
+        else if isNothing answer then liftIO $ reportEvalError s expr
+        else put $ M.insert (ws !! 0) (fromJust answer) m
+    else let
+      expr = parse statement
+      answer = eval m =<< expr
+      in if isNothing expr then liftIO $ reportParseError statement
+      else if isNothing answer then liftIO $ reportEvalError statement expr
+      else liftIO $ putStrLn $ statement ++ " = " ++ show (fromJust answer)
+  process :: (Show t, WithDefaults t) => StateT (M.Map Name t) IO ()
+  process = do
+    content <- liftIO $ readFile filename
+    forM_ (lines content) $ \line -> do
+      m <- get
+      processStatement m line
+    m <- get
+    liftIO $ forM_ (M.toList m) $ \(k, v) ->
+      putStrLn $ k ++ " = " ++ show v
