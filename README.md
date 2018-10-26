@@ -21,10 +21,11 @@ it could be extended by providing `Ops` instance with list of expectable functio
 - [x] Precedence for infix operators
 - [x] Arity for prefix operators
 - [x] Right/left associativity for infix operators
-- [ ] Processing file
+- [x] Processing file
 - [ ] Parse S-expressions
 - [ ] `type ExprOp t = forall a. Parse a => Op a t` instead of `Op t t`
-- [ ] ```haskell
+- [ ]
+```haskell
 type Type = forall t. Parse t => t
 data Op = { ... signature :: [Type] ... }
 ```
