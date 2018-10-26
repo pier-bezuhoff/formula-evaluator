@@ -37,11 +37,16 @@ instance WithDefaults Bool where
     ("0", False)
     ]
 
--- TODO: associativity!
 type Precedence = Int -- [2..9]
 type Arity = Int -- [1..]
-data Fixity = Infix Precedence | Prefix Arity deriving (Show, Eq, Ord) -- Infix -> arity == 2
 type Name = String
+data Fixity = InfixL Precedence | InfixR Precedence | Prefix Arity deriving (Show, Eq, Ord) -- Infix -> arity == 2
+pattern Infix precedence <- (let
+  f = \case
+    InfixL p -> Just p
+    InfixR p -> Just p
+    _ -> Nothing
+  in f -> Just precedence)
 
 data Op x y = Op { name :: Name, fun :: [x] -> y, fixity :: Fixity }
 type ExprOp x = Op x x
@@ -61,7 +66,9 @@ listify2 abc [a,b] = abc a b
 listify3 abcd [a,b,c] = abcd a b c
 funop name original = Op name (listify1 original) (Prefix 1)
 bifunop name original = Op name (listify2 original) (Prefix 2)
-binop name original precedence = Op name (listify2 original) (Infix precedence)
+binop name original precedence = Op name (listify2 original) (InfixL precedence)
+binopL = binop
+binopR name original precedence = Op name (listify2 original) (InfixR precedence)
 
 data Token x = L Name | O (ExprOp x) Precedence deriving Show
 
@@ -73,7 +80,7 @@ instance Ops Double where
     binop "-" (-) 6,
     binop "*" (*) 7,
     binop "/" (/) 7,
-    binop "^" (**) 8,
+    binopR "^" (**) 8,
     funop "~" negate,
     funop "sin" sin,
     funop "sinh" sinh,
@@ -114,53 +121,72 @@ tokenize = go 1 . split where
 
 toRPN :: Parse x => [Token x] -> Maybe [Token x]
 toRPN = go mempty 0 where
-  go :: Parse x => M.Map Precedence (ExprOp x, Arity) -> Arity -> [Token x] -> Maybe [Token x]
+  pop :: Ord k => k -> M.Map k [v] -> Maybe (v, M.Map k [v])
+  pop k m
+    | Just (v:vs) <- m M.!? k
+    = Just (v, M.update (const $ if null vs then Nothing else Just vs) k m)
+    | otherwise = Nothing
+  popMax :: Ord k => M.Map k [v] -> Maybe ((k, v), M.Map k [v])
+  popMax m
+    | M.null m = Nothing
+    | (k, v:vs) <- M.findMax m
+    = Just ((k, v), M.updateMax(const $ if null vs then Nothing else Just vs) m)
+  insert :: Ord k => k -> v -> M.Map k [v] -> M.Map k [v]
+  insert k v m = M.insertWith (++) k [v] m
+  -- setMax v m: m may NOT be null
+  setMax :: Ord k => v -> M.Map k [v] -> M.Map k [v]
+  setMax v m
+    | (_, _:vs) <- M.findMax m
+    = M.updateMax (const $ Just $ v:vs) m
+
+  go :: Parse x => M.Map Precedence [(ExprOp x, Arity)] -> Arity -> [Token x] -> Maybe [Token x]
   go m 0 []
-    | not $ M.null m
-    , ((n, (op, _)), m') <- M.deleteFindMax m
-    = if M.null m'
-      then Just [O op n]
+    | Just ((precedence, (op, _)), m') <- popMax m
+    = if M.null m' then Just [O op precedence]
       else let
-        (_, (_, k)) = M.findMax m'
-        in (O op n :) <$> go m' k []
+        Just ((_, (_, arity)), _) = popMax m'
+        in (O op precedence :) <$> go m' arity []
   go m _ []
     | M.null m = Just []
   go m arity (l@(L _) : ts)
     | not (M.null m) && arity == 0
-    , ((maxN, (op, _)), m') <- M.deleteFindMax m
+    , Just ((maxN, (op, _)), m') <- popMax m
     = if M.null m'
       then (O op maxN :) . (l:) <$> go m' (-1) ts
       else let
-        (_, (_, k)) = M.findMax m'
+        Just ((_, (_, k)), _) = popMax m'
         in (O op maxN :) . (l:) <$> go m' (pred k) ts
     | otherwise = (l:) <$> go m (pred arity) ts
   go m k (O op n : ts)
-    | M.null m = go (M.singleton n (op, error "no matter")) (k + opArity op) ts
+    | M.null m = go (M.singleton n [(op, error "no matter")]) (k + opArity op) ts
     | otherwise = let
-    ((maxN, (maxOp, _)), m') = M.deleteFindMax m
-    ((maxN', (maxOp', maxArity')), m'') = M.deleteFindMax m'
-    prependMax = (O maxOp maxN :)
-    insertNew arity m = M.insert n (op, arity) m
-    single = M.singleton n (op, error "no matter")
-    in case maxN `compare` n of
-      EQ -> case fixity op of -- -
-        -- IL{I}...
-        Infix _ -> prependMax <$> go (insertNew 1 m') 1 ts
-        -- P...(PL...L)({P}...
-        Prefix arity -> let
-          m'' = M.updateMax (const $ Just (maxOp', pred maxArity')) m'
-          in if M.null m' then Nothing
-          else prependMax <$> go (insertNew arity m'') arity ts
-      GT -> case fixity op of -- \
-        Infix _ -> prependMax <$> if M.null m'
-          then go single 1 ts
-          else go m' maxArity' (O op n : ts)
-        Prefix arity -> if k == 0
-          then prependMax <$> go m' (pred maxArity') (O op n : ts)
-          else go (insertNew arity m) k ts -- maybe impossible
-      LT -> case fixity op of -- /
-        Infix _ -> go (insertNew 1 $ M.updateMax (const $ Just (maxOp, k)) m) 1 ts
-        Prefix arity -> go (insertNew arity $ M.updateMax (const $ Just (maxOp, pred k)) m) arity ts
+      Just ((maxN, (maxOp, _)), m') = popMax m
+      Just ((maxN', (maxOp', maxArity')), m'') = popMax m'
+      prependMax = (O maxOp maxN :)
+      insertNew arity m = insert n (op, arity) m
+      single = M.singleton n [(op, error "no matter")]
+      in case maxN `compare` n of
+        EQ -> case fixity op of -- -
+          -- IL{I}...
+          InfixL _ -> prependMax <$> go (insertNew 1 m') 1 ts
+          InfixR _ -> case fixity maxOp of
+            InfixL _ -> prependMax <$> go (insertNew 1 m') 1 ts
+            -- InfixR: special case: now >= 2 values in list at maxN
+            InfixR _ -> go (insertNew 1 $ setMax (maxOp, 0) m) 1 ts
+          -- P...(PL...L)({P}...
+          Prefix arity -> if M.null m'
+            then Nothing
+            else prependMax <$> go (insertNew arity $ setMax (maxOp', pred maxArity') m') arity ts
+        GT -> case fixity op of -- \
+          Infix _ -> prependMax <$> if M.null m'
+            then go single 1 ts
+            else go m' maxArity' (O op n : ts)
+          Prefix arity -> if k == 0
+            then prependMax <$> go m' (pred maxArity') (O op n : ts)
+            else go (insertNew arity m) k ts -- maybe impossible
+        LT -> case fixity op of -- /
+          Infix _ -> go (insertNew 1 $ setMax (maxOp, k) m) 1 ts
+          Prefix arity -> go (insertNew arity $ setMax (maxOp, pred k) m) arity ts
   go _ _ _ = Nothing
 
 fromRPN :: Parse x => [Token x] -> Maybe (Expr x)
