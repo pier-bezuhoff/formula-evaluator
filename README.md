@@ -22,9 +22,9 @@ it could be extended by providing `Ops` instance with list of expectable functio
 - [x] Arity for prefix operators
 - [x] Right/left associativity for infix operators
 - [x] Processing file
+- [ ] Interactive prompt
 - [ ] Parse S-expressions
-- [ ] `type ExprOp t = forall a. Parse a => Op a t` instead of `Op t t`
-- [ ]
+- [ ] Poly-type signature:
 ```haskell
 type Type = forall t. Parse t => t
 data Op = { ... signature :: [Type] ... }
