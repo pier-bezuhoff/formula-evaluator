@@ -22,8 +22,8 @@ it could be extended by providing `Parse` instance with list of expectable funct
 - [x] Arity for prefix operators
 - [x] Right/left associativity for infix operators
 - [x] Processing file
-- [x] REPL (on <statement>)
-- [x] REPL additional functions: `:parse`, `:tokenize`, `:toRPN`, `:parseRPN`, `:evalRPN` and then <expression>; `:help`, `:quit`
+- [x] REPL (on \<statement\>)
+- [x] REPL additional functions: `:parse`, `:tokenize`, `:toRPN`, `:parseRPN`, `:evalRPN` and then \<expression\>; `:help`, `:quit`
 - [ ] Parse S-expressions
 - [ ] Poly-type signature:
 ```haskell
