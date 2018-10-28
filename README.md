@@ -1,7 +1,7 @@
 # formula-evaluator
 Simple formula parser and evaluator.
 Now could parse Double and Bool expression,
-it could be extended by providing `Parse` instance with list of expectable functions
+it could be extended by providing `Parse` instance with list (`ops :: Scope (ExprOp t)`) of expectable functions
 # Expression syntax
 ```
 <delimiter-character> ::= " " | "," | ";"
@@ -14,9 +14,9 @@ it could be extended by providing `Parse` instance with list of expectable funct
 <statement> ::= <symbol> " "+ "=" " "+ <expression> | <expression>
 ```
 # Plan:
-- [x] Parse and evaluate `Parse t => Expr t`, if specified list of operators under `t` then `Ops t`, `Parse t = (Read t, Ops t)`
+- [x] Parse and evaluate `Parse t => Expr t`, `class (Read t, Show t) => Parse t where ops :: Scope (ExprOp t)`
 - [x] Parse reverse polish notation
-- [x] `Parse t => WithDefaults t`, custom default symbols which are interpretered as `t`
+- [x] `Parse t => defaultScope :: Scope t`, custom default symbols which are interpretered as `t`
 - [x] Prefix and infix operators
 - [x] Precedence for infix operators
 - [x] Arity for prefix operators
