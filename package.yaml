@@ -1,5 +1,6 @@
 name:                formula-evaluator
 version:             0.1.0.0
+synopsis: "Simple extensible formula parser and evaluator (with REPL)"
 github:              "pier-bezuhoff/formula-evaluator"
 license:             BSD3
 author:              "Pier Bezuhov"
@@ -9,6 +10,8 @@ copyright:           ""
 extra-source-files:
 - README.md
 - ChangeLog.md
+
+ghc-options: -Wall
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -21,7 +24,7 @@ description:         Please see the README on GitHub at <https://github.com/pier
 
 dependencies:
 - base >= 4.7 && < 5
-- containers
+- containers # Data.Map
 - mtl
 
 library:
@@ -31,6 +34,15 @@ executables:
   formula-evaluator-exe:
     main:                Main.hs
     source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - formula-evaluator
+  formula-evaluator-repl-exe:
+    main: REPL.hs
+    source-dirs: app
     ghc-options:
     - -threaded
     - -rtsopts

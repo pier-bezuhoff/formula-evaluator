@@ -22,7 +22,8 @@ it could be extended by providing `Ops` instance with list of expectable functio
 - [x] Arity for prefix operators
 - [x] Right/left associativity for infix operators
 - [x] Processing file
-- [ ] Interactive prompt
+- [x] REPL (on <statement>)
+- [x] REPL additional functions: `:parse`, `:tokenize`, `:toRPN`, `:parseRPN`, `:evalRPN` and then <expression>; `:help`, `:quit`
 - [ ] Parse S-expressions
 - [ ] Poly-type signature:
 ```haskell

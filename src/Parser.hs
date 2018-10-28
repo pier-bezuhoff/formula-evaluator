@@ -1,109 +1,17 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase, TypeApplications, ConstraintKinds #-}
 {-# LANGUAGE PatternSynonyms, ViewPatterns, PatternGuards #-}
 module Parser where
 
-import Data.List (intercalate)
-import Data.Bits (xor)
 import Text.Read (readMaybe)
-import Control.Arrow ((&&&))
 import Data.Maybe
 import Data.List
 import Control.Monad
 import Control.Monad.State
 import qualified Data.Map as M
-
-data Expr x = Val x | Var Name | Expr (ExprOp x) [Expr x] deriving (Eq)
-instance Show x => Show (Expr x) where
-  show = \case
-    Val x -> show x
-    Var name -> name
-    Expr op exprs -> "(" ++ show op ++ " " ++ intercalate " " (map show exprs) ++ ")"
-eval :: M.Map Name x -> Expr x -> Maybe x
-eval _ (Val x)  = Just x
-eval m (Var x) = M.lookup x m
-eval m (Expr op xs) = fun op <$> traverse (eval m) xs
-eval_ = eval mempty
-eval' :: WithDefaults x => Expr x -> Maybe x
-eval' = eval defaults
-class Parse x => WithDefaults x where defaults :: M.Map Name x
-instance WithDefaults Double where
-  defaults = M.fromList [
-    ("e", exp 1),
-    ("pi", pi)
-    ]
-instance WithDefaults Bool where
-  defaults = M.fromList [
-    ("true", True),
-    ("false", False),
-    ("1", True),
-    ("0", False)
-    ]
-
-type Precedence = Int -- [2..9]
-type Arity = Int -- [1..]
-type Name = String
-data Fixity = InfixL Precedence | InfixR Precedence | Prefix Arity deriving (Show, Eq, Ord) -- Infix -> arity == 2
-pattern Infix precedence <- (let
-  f = \case
-    InfixL p -> Just p
-    InfixR p -> Just p
-    _ -> Nothing
-  in f -> Just precedence)
-
-data Op x y = Op { name :: Name, fun :: [x] -> y, fixity :: Fixity }
-type ExprOp x = Op x x
-instance Show (Op x y) where show op = name op
-instance Eq (Op x y) where a == b = name a == name b
-opArity :: Op x y -> Arity
-opArity op = case fixity op of
-  Infix _ -> 2
-  Prefix k -> k
-opPrecedence :: Op x y -> Precedence
-opPrecedence op = case fixity op of
-  Infix n -> n
-  Prefix _ -> 10
-
-listify1 ab [a] = ab a
-listify2 abc [a,b] = abc a b
-listify3 abcd [a,b,c] = abcd a b c
-funop name original = Op name (listify1 original) (Prefix 1)
-bifunop name original = Op name (listify2 original) (Prefix 2)
-binop name original precedence = Op name (listify2 original) (InfixL precedence)
-binopL = binop
-binopR name original precedence = Op name (listify2 original) (InfixR precedence)
+import Expr
 
 data Token x = L Name | O (ExprOp x) Precedence deriving Show
-
-class Ops x where ops :: M.Map Name (ExprOp x)
-type Parse x = (Read x, Ops x)
-instance Ops Double where
-  ops = M.fromList $ map (name &&& id) $ [
-    binop "+" (+) 6,
-    binop "-" (-) 6,
-    binop "*" (*) 7,
-    binop "/" (/) 7,
-    binopR "^" (**) 8,
-    funop "sqrt" sqrt,
-    funop "~" negate,
-    funop "sin" sin,
-    funop "sinh" sinh,
-    funop "cos" cos,
-    funop "cosh" cosh,
-    funop "exp" exp,
-    funop "ln" log,
-    bifunop "log" logBase
-    ]
-instance Ops Bool where
-  ops = M.fromList $ map (name &&& id) $ [
-    binop "and" (&&) 3,
-    binop "&&" (&&) 3,
-    binop "or" (||) 2,
-    binop "||" (||) 2,
-    binop "xor" xor 6,
-    binop "==" (==) 6,
-    funop "not" not,
-    funop "~" not
-    ]
 
 tokenize :: Parse x => String -> Maybe [Token x]
 tokenize = go 1 . split where
@@ -124,16 +32,12 @@ tokenize = go 1 . split where
 
 toRPN :: Parse x => [Token x] -> Maybe [Token x]
 toRPN = go mempty 0 where
-  pop :: Ord k => k -> M.Map k [v] -> Maybe (v, M.Map k [v])
-  pop k m
-    | Just (v:vs) <- m M.!? k
-    = Just (v, M.update (const $ if null vs then Nothing else Just vs) k m)
-    | otherwise = Nothing
   popMax :: Ord k => M.Map k [v] -> Maybe ((k, v), M.Map k [v])
   popMax m
     | M.null m = Nothing
     | (k, v:vs) <- M.findMax m
     = Just ((k, v), M.updateMax(const $ if null vs then Nothing else Just vs) m)
+    | otherwise = Nothing
   insert :: Ord k => k -> v -> M.Map k [v] -> M.Map k [v]
   insert k v m = M.insertWith (++) k [v] m
   -- setMax v m: m may NOT be null
@@ -164,7 +68,7 @@ toRPN = go mempty 0 where
     | M.null m = go (M.singleton n [(op, error "no matter")]) (k + opArity op) ts
     | otherwise = let
       Just ((maxN, (maxOp, _)), m') = popMax m
-      Just ((maxN', (maxOp', maxArity')), m'') = popMax m'
+      Just ((_, (maxOp', maxArity')), _) = popMax m'
       prependMax = (O maxOp maxN :)
       insertNew arity m = insert n (op, arity) m
       single = M.singleton n [(op, error "no matter")]
@@ -176,6 +80,7 @@ toRPN = go mempty 0 where
             InfixL _ -> prependMax <$> go (insertNew 1 m') 1 ts
             -- InfixR: special case: now >= 2 values in list at maxN
             InfixR _ -> go (insertNew 1 $ setMax (maxOp, 0) m) 1 ts
+            Prefix _ -> Nothing
           -- P...(PL...L)({P}...
           Prefix arity -> if M.null m'
             then Nothing
@@ -232,33 +137,65 @@ parseRPN = go [] . words where
 parseS :: Parse x => String -> Maybe (Expr x)
 parseS = undefined
 
+processLine :: forall t. Parse t => Scope t -> String -> StateT (Scope t) IO ()
+processLine scope line = go where
+  ws = words line
+  s = intercalate " " $ tail $ ws
+  doCarefully s expr answer action
+    | Nothing <- expr = liftIO $ reportParseError s
+    | Nothing <- answer = liftIO $ reportEvalError s expr
+    | otherwise = action
+  go = case ws of
+    ":tokenize" : _ -> liftIO $ print $ tokenize @t s
+    ":toRPN" : _ -> liftIO $ print $ toRPN =<< tokenize @t s
+    ":parse" : _ -> liftIO $ print $ parse @t s
+    ":parseRPN" : _ -> liftIO $ print $ parseRPN @t s
+    ":evalRPN" : _ -> liftIO $ print $ evalScope scope =<< parseRPN s
+    ":parseS" : _ -> liftIO $ print $ parseS @t s
+    ":evalS" : _ -> liftIO $ print $ evalScope scope =<< parseS s
+    ":help" : _ -> liftIO $ putStrLn help
+    ":?" : _ -> liftIO $ putStrLn help
+    _ : "=" : _ -> let
+      s = intercalate " " $ drop 2 $ ws
+      expr = parse s
+      answer = evalScope scope =<< expr
+      in doCarefully s expr answer $ put $ M.insert (ws !! 0) (fromJust answer) scope
+    _ ->  let
+      expr = parse line
+      answer = evalScope scope =<< expr
+      in doCarefully line expr answer $ liftIO $ putStrLn $ line ++ " = " ++ show (fromJust answer)
+
+reportParseError s = putStrLn $ "ERROR: Failed to parse expression: " ++ s
+reportEvalError s expr = putStrLn $ "ERROR: Failed to evaluate expression: " ++ s ++ "\n(parsed as " ++ show (fromJust expr) ++ ")"
+help = "Available commands:\n" ++ (intercalate "\n" $ map ('\t':) $ [
+  "<expresion> -- \\s -> \"$s = $(fromJust $ evalScope scope =<< parse s)\"",
+  "<statement> -- \\\"$var = $s\" -> put $ M.insert var (fromJust $ evalScope scope =<< parse s) scope",
+  ":tokenize <expression>",
+  ":toRPN <expression> -- toRPN <=< tokenize",
+  ":parse <expression>",
+  ":parseRPN <expression>",
+  ":evalRPN <expression> -- evalScope scope <=< parseRPN",
+  ":help or :?"
+  ]) ++ "\n"
+
+repl :: IO ()
+repl = void $ runStateT (processRepl @Double) defaultScope where
+  processRepl :: Parse t => StateT (Scope t) IO ()
+  processRepl = do
+    line <- liftIO $ getLine
+    unless (line `elem` ["", "quit", "exit", ":q", ":Q", ":quit", ":exit"] || all (== ' ') line) $ do
+      scope <- get
+      processLine scope line
+      processRepl
+
 evalFile :: FilePath -> IO ()
-evalFile filename = void $ runStateT (process @Double) defaults where
-  reportParseError s = putStrLn $ "ERROR: Failed to parse expression:" ++ s
-  reportEvalError s expr = putStrLn $ "ERROR: Failed to evaluate expression:" ++ s ++ "\n(parsed as " ++ show (fromJust expr) ++ ")"
-  processStatement :: (Show t, WithDefaults t) => M.Map Name t -> String -> StateT (M.Map Name t) IO ()
-  processStatement m statement = do
-    let ws = words statement
-    if length ws > 2 && ws !! 1 == "="
-      then let
-        s = drop (2 + fromJust (findIndex (== '=') statement)) statement
-        expr = parse s
-        answer = eval m =<< expr
-        in if isNothing expr then liftIO $ reportParseError s
-        else if isNothing answer then liftIO $ reportEvalError s expr
-        else put $ M.insert (ws !! 0) (fromJust answer) m
-    else let
-      expr = parse statement
-      answer = eval m =<< expr
-      in if isNothing expr then liftIO $ reportParseError statement
-      else if isNothing answer then liftIO $ reportEvalError statement expr
-      else liftIO $ putStrLn $ statement ++ " = " ++ show (fromJust answer)
-  process :: (Show t, WithDefaults t) => StateT (M.Map Name t) IO ()
+evalFile filename = void $ runStateT (process @Double) defaultScope where
+  process :: Parse t => StateT (Scope t) IO ()
   process = do
     content <- liftIO $ readFile filename
     forM_ (lines content) $ \line -> do
       m <- get
-      processStatement m line
+      processLine m line
     m <- get
     liftIO $ forM_ (M.toList m) $ \(k, v) ->
       putStrLn $ k ++ " = " ++ show v

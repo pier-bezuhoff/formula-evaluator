@@ -1,5 +1,4 @@
 module Main where
-
 import Parser (evalFile)
 
 main :: IO ()
