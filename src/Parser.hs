@@ -26,7 +26,7 @@ tokenize = go 1 . split where
   go _ [] = Left "brackets doesn't match"
   go n (w:ws)
     | w == "(" = go (10 * n) ws -- NOTE: skip "()", "(())", ...
-    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else Left "ERROR: brackets doesn't match"
+    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else Left "brackets doesn't match"
     | otherwise = case M.lookup w ops of
         Just op -> (O op (opPrecedence op * n) :) <$> go n ws
         Nothing -> (L w :) <$> go n ws
