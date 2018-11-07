@@ -71,7 +71,7 @@ toRPN = go mempty 0 where
       Just ((maxN, (maxOp, _)), m') = popMax m
       Just ((_, (maxOp', maxArity')), _) = popMax m'
       prependMax = (O maxOp maxN :)
-      insertNew arity m = insert n (op, arity) m
+      insertNew arity = insert n (op, arity)
       single = M.singleton n [(op, error "no matter")]
       in case maxN `compare` n of
         EQ -> case fixity op of -- -
@@ -121,7 +121,7 @@ parse = fromRPN <=< toRPN <=< tokenize
 parseRPN :: Parse x => String -> Either Error (Expr x)
 parseRPN = go [] . words where
   go [x] [] = Right x
-  go _ [] = Left "unexpected end of expresion"
+  go _ [] = Left "unexpected end of expression"
   go stack (s:rest) = let mv = readMaybe s in
     case mv of
       Just v -> go (Val v : stack) rest
@@ -133,7 +133,7 @@ parseRPN = go [] . words where
               1 -> let (a:xs) = stack in go (Expr op [a] : xs) rest
               2 -> let (b:a:xs) = stack in go (Expr op [a,b] : xs) rest
               3 -> let (c:b:a:xs) = stack in go (Expr op [a,b,c] : xs) rest
-              arity -> Left $ "not implemented arity " ++ show arity ++ " of " ++ show op
+              arity -> Left $ "not implemented arity " ++ show arity ++ " for " ++ show op
 
 parseS :: Parse x => String -> Either Error (Expr x)
 parseS = error "not implemented yet"
