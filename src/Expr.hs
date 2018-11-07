@@ -5,6 +5,7 @@ import Data.List (intercalate)
 import Data.Bits (xor)
 import qualified Data.Map as M
 
+type Error = String
 data Expr x = Val x | Var Name | Expr (ExprOp x) [Expr x] deriving (Eq)
 instance Show x => Show (Expr x) where
   show = \case -- show as sexp
@@ -53,16 +54,18 @@ binopR name original precedence = Op name (listify2 original) (InfixR precedence
 
 type Scope t = M.Map Name t
 
-evalScope :: Scope x -> Expr x -> Maybe x
-evalScope _ (Val x)  = Just x
-evalScope m (Var x) = M.lookup x m
+evalScope :: Scope x -> Expr x -> Either Error x
+evalScope _ (Val x)  = Right x
+evalScope m (Var var) = case M.lookup var m of
+  Nothing -> Left $ "variable " ++ var ++ " out of scope"
+  Just x -> Right x
 evalScope m (Expr op xs) = fun op <$> traverse (evalScope m) xs
 
 class (Read x, Show x) => Parse x where
   ops :: M.Map Name (ExprOp x)
   defaultScope :: Scope x
   defaultScope = mempty
-  eval :: Expr x -> Maybe x
+  eval :: Expr x -> Either Error x
   eval = evalScope defaultScope
 
 instance Parse Double where
