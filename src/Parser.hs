@@ -114,7 +114,7 @@ fromRPN = go [] where
   go stack (t:ts) = case t of
     L l -> go (fromL l : stack) ts
     O op _ -> grab op stack ts
-    
+
 parse :: Parse x => String -> Either Error (Expr x)
 parse = fromRPN <=< toRPN <=< tokenize
 
@@ -167,8 +167,11 @@ processLine scope line = go where
       answer = evalScope scope =<< expr
       in doCarefully line expr answer $ liftIO $ putStrLn $ line ++ " = " ++ show (fromRight undefined answer)
 
+reportParseError :: [Char] -> [Char] -> IO ()
 reportParseError s err = putStrLn $ "Error while parsing expression at \"" ++ s ++ "\"\n\t" ++ err
+reportEvalError :: Show a => [Char] -> a -> [Char] -> IO ()
 reportEvalError s expr err = putStrLn $ "Error while evaluating expression \"" ++ s ++ "\"\n(parsed as " ++ show expr ++ ")\n\t" ++ err
+help :: [Char]
 help = "Available commands:\n" ++ (intercalate "\n" $ map ('\t':) $ [
   "<expresion> -- evaluate expression",
   "<statement> -- assign expresion in statement to variable",

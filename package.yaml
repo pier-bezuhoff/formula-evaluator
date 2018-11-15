@@ -26,6 +26,7 @@ dependencies:
 - base >= 4.7 && < 5
 - containers # Data.Map
 - mtl
+- template-haskell
 
 library:
   source-dirs: src
