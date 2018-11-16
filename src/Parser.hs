@@ -10,7 +10,7 @@ import Data.List
 import Control.Monad
 import Control.Monad.State
 import qualified Data.Map as M
-import Expr
+import Parser
 
 data Token x = L Name | O (ExprOp x) Precedence deriving Show
 
