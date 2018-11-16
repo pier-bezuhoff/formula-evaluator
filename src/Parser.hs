@@ -6,15 +6,17 @@ module Parser where
 import Text.Read (readMaybe)
 import Data.Maybe
 import Data.Either
+import Data.Proxy
 import Data.List
 import Control.Monad
+import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.Map as M
-import Parser
+import Parseable
 
-data Token x = L Name | O (ExprOp x) Precedence deriving Show
+data Token = L AParseable APType | V Name | O (Op AParseable) Precedence deriving Show
 
-tokenize :: Parse x => String -> Either Error [Token x]
+tokenize :: MonadError Error me => Parseable x => String -> me [Token]
 tokenize = go 1 . split where
   split' [] w = if null w then [] else [w]
   split' (c:s) w
@@ -22,6 +24,15 @@ tokenize = go 1 . split where
     | c == ' ' || c == ',' || c == ';' = if null w then split' s "" else w : split' s ""
     | otherwise = split' s (c : w)
   split s = map reverse $ split' s ""
+  readMaybeAPT :: APType -> String -> Maybe AParseable
+  readMaybeAPT apt w = AParseable <$> case apt of
+    APType p -> readMaybeAs p w where
+      readMaybeAs :: Parseable x => Proxy x -> String -> Maybe x
+      readMaybeAs _ = readMaybe
+  detectType :: String -> Token
+  detectType w = case catMaybes $ map readMaybeAPT parseableTypes of
+    [] -> V w
+    apt:_ -> L (readMaybeAPT apt w) apt
   go 1 [] = Right []
   go _ [] = Left "brackets doesn't match"
   go n (w:ws)
@@ -31,7 +42,7 @@ tokenize = go 1 . split where
         Just op -> (O op (opPrecedence op * n) :) <$> go n ws
         Nothing -> (L w :) <$> go n ws
 
-toRPN :: Parse x => [Token x] -> Either Error [Token x]
+toRPN :: Parseable x => [Token x] -> Either Error [Token x]
 toRPN = go mempty 0 where
   popMax :: Ord k => M.Map k [v] -> Maybe ((k, v), M.Map k [v])
   popMax m
@@ -47,7 +58,7 @@ toRPN = go mempty 0 where
     | (_, _:vs) <- M.findMax m
     = M.updateMax (const $ Just $ v:vs) m
 
-  go :: Parse x => M.Map Precedence [(ExprOp x, Arity)] -> Arity -> [Token x] -> Either Error [Token x]
+  go :: Parseable x => M.Map Precedence [(ExprOp x, Arity)] -> Arity -> [Token x] -> Either Error [Token x]
   go m 0 []
     | Just ((precedence, (op, _)), m') <- popMax m
     = if M.null m' then Right [O op precedence]
@@ -98,7 +109,7 @@ toRPN = go mempty 0 where
           Prefix arity -> go (insertNew arity $ setMax (maxOp, pred k) m) arity ts
   go _ _ _ = Left "bad syntax"
 
-fromRPN :: Parse x => [Token x] -> Either Error (Expr x)
+fromRPN :: Parseable x => [Token x] -> Either Error (Expr x)
 fromRPN = go [] where
   fromL l = fromMaybe (Var l) $ Val <$> readMaybe l
   grab op stack
@@ -115,10 +126,10 @@ fromRPN = go [] where
     L l -> go (fromL l : stack) ts
     O op _ -> grab op stack ts
 
-parse :: Parse x => String -> Either Error (Expr x)
+parse :: Parseable x => String -> Either Error (Expr x)
 parse = fromRPN <=< toRPN <=< tokenize
 
-parseRPN :: Parse x => String -> Either Error (Expr x)
+parseRPN :: Parseable x => String -> Either Error (Expr x)
 parseRPN = go [] . words where
   go [x] [] = Right x
   go _ [] = Left "unexpected end of expression"
@@ -135,10 +146,10 @@ parseRPN = go [] . words where
               3 -> let (c:b:a:xs) = stack in go (Expr op [a,b,c] : xs) rest
               arity -> Left $ "not implemented arity " ++ show arity ++ " for " ++ show op
 
-parseS :: Parse x => String -> Either Error (Expr x)
+parseS :: Parseable x => String -> Either Error (Expr x)
 parseS = error "not implemented yet"
 
-processLine :: forall t. Parse t => Scope t -> String -> StateT (Scope t) IO ()
+processLine :: forall t. Parseable t => Scope t -> String -> StateT (Scope t) IO ()
 processLine scope line = go where
   ws = words line
   s = intercalate " " $ tail $ ws
@@ -185,7 +196,7 @@ help = "Available commands:\n" ++ (intercalate "\n" $ map ('\t':) $ [
 
 repl :: IO ()
 repl = void $ runStateT (processRepl @Double) defaultScope where
-  processRepl :: Parse t => StateT (Scope t) IO ()
+  processRepl :: Parseable t => StateT (Scope t) IO ()
   processRepl = do
     line <- liftIO $ getLine
     unless (line `elem` ["", "quit", "exit", ":q", ":Q", ":quit", ":exit"] || all (== ' ') line) $ do
@@ -195,7 +206,7 @@ repl = void $ runStateT (processRepl @Double) defaultScope where
 
 evalFile :: FilePath -> IO ()
 evalFile filename = void $ runStateT (process @Double) defaultScope where
-  process :: Parse t => StateT (Scope t) IO ()
+  process :: Parseable t => StateT (Scope t) IO ()
   process = do
     content <- liftIO $ readFile filename
     forM_ (lines content) $ \line -> do
