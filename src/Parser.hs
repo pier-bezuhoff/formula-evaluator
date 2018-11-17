@@ -3,12 +3,8 @@
 {-# LANGUAGE LambdaCase, PatternSynonyms, ViewPatterns #-}
 {-# LANGUAGE PatternGuards #-}
 module Parser where
-
 import Text.Read (readMaybe)
 import Data.Monoid (First(..))
-import Control.Arrow (first)
-import Data.Maybe
-import Data.Either
 import Data.Proxy
 import Data.List
 import Control.Monad
@@ -17,6 +13,7 @@ import Control.Monad.State
 import qualified Data.Map as M
 import Parseable
 
+-- TODO: Token: O -> O [(AnOp, Precedence)] : op should be chosen after type check
 -- L -> Val, V -> Var
 data Token = L AParseable APType | V Name | O AnOp Precedence deriving Show
 -- matchs L and V ([U]nary)
@@ -118,45 +115,32 @@ toRPN = go mempty 0 where
           Prefix arity -> go (insertNew arity $ setMax (maxOp, pred k) m) arity ts
   go _ _ _ = throwError "bad syntax"
 
-fromRPN :: forall me. MonadError Error me => [Token] -> me (Either AnExpr ATypedExpr)
+fromRPN :: forall me. MonadError Error me => [Token] -> me (Either FreeVar ATypedExpr)
 fromRPN = go [] where
-  safeExpr' op es = splitET <$> safeExpr @me op es
-  splitET (ATE te) = let te2et (TypedExpr e t) = (e, Just t) in first AnExpr $ te2et te
-  go :: [(AnExpr, Maybe APType)] -> [Token] -> me (Either AnExpr ATypedExpr)
-  go [(e, mt)] [] = return $ case mt of
-    Nothing -> Left e
-    Just t -> Right $ ae2ate e t
+  ap2ate :: APType -> AParseable -> ATypedExpr
+  ap2ate apt (AParseable p) = p2ate p where
+    p2ate :: Parseable x => x -> ATypedExpr
+    p2ate p = ATE $ TypedExpr (Val p) apt
+  go :: [Either FreeVar ATypedExpr] -> [Token] -> me (Either FreeVar ATypedExpr)
+  go [e] [] = return e
   go _ [] = throwError "unexpected end of expression"
   go stack (t:ts) = case t of
-    L p apt -> go ((AnExpr $ Val p, Just apt) : stack) ts
-    V name -> go ((AnExpr $ Var name, Nothing) : stack) ts
+    L p apt -> go (Right (ap2ate apt p) : stack) ts
+    V name -> go (Left (FreeVar name) : stack) ts
     O op _ -> if arity' op > length stack
       then throwError $ "not enough (< " ++ show (arity' op) ++ ") args for " ++ show op
       else let (start, rest) = splitAt (arity' op) stack
         in do
-          e <- safeExpr' op (reverse start)
-          go (e : rest) ts
+          e <- safeExpr @me op (reverse start)
+          go (Right e : rest) ts
 
-parse :: Parseable x => String -> Either Error (Expr x)
+fromS :: forall me. MonadError Error me => [Token] -> me (Either FreeVar ATypedExpr)
+fromS = undefined
+
+parse :: MonadError Error me => String -> me (Either FreeVar ATypedExpr)
 parse = fromRPN <=< toRPN <=< tokenize
 
-parseRPN :: Parseable x => String -> Either Error (Expr x)
-parseRPN = go [] . words where
-  go [x] [] = Right x
-  go _ [] = Left "unexpected end of expression"
-  go stack (s:rest) = let mv = readMaybe s in
-    case mv of
-      Just v -> go (Val v : stack) rest
-      Nothing -> case  M.lookup s ops of
-        Nothing -> go (Var s : stack) rest
-        Just op -> let
-          (start, xs) = splitAt (arity op) stack
-          in go (Expr op (reverse start) : xs) rest
-
-parseS :: Parseable x => String -> Either Error (Expr x)
-parseS = error "not implemented yet"
-
-processLine :: forall t. Parseable t => Scope t -> String -> StateT (Scope t) IO ()
+processLine :: Scope AParseable -> String -> StateT (Scope AParseable) IO ()
 processLine scope line = go where
   ws = words line
   s = intercalate " " $ tail $ ws
@@ -165,25 +149,33 @@ processLine scope line = go where
     | Right expr' <- expr
     , Left err <- answer = liftIO $ reportEvalError s expr' err
     | otherwise = action
+  evalOrFree :: MonadError Error me => Scope AParseable -> Either FreeVar ATypedExpr -> me AParseable
+  evalOrFree scope = \case
+    Left (FreeVar name) -> case M.lookup name scope of
+      Nothing -> throwError $ "unknown free var " ++ name
+      Just ap -> return $ ap
+    Right ate -> evalScope' scope ate
   go = case ws of
-    ":tokenize" : _ -> liftIO $ print $ tokenize @t s
-    ":toRPN" : _ -> liftIO $ print $ toRPN =<< tokenize @t s
-    ":parse" : _ -> liftIO $ print $ parse @t s
-    ":parseRPN" : _ -> liftIO $ print $ parseRPN @t s
-    ":evalRPN" : _ -> liftIO $ print $ evalScope scope =<< parseRPN s
-    ":parseS" : _ -> liftIO $ print $ parseS @t s
-    ":evalS" : _ -> liftIO $ print $ evalScope scope =<< parseS s
+    ":tokenize" : _ -> liftIO $ print $ tokenize @(Either String) s
+    ":toRPN" : _ -> liftIO $ print $ toRPN @(Either String) =<< tokenize s
+    ":parse" : _ -> liftIO $ print $ parse @(Either String) s
+    ":parseRPN" : _ -> liftIO $ print $ fromRPN @(Either String) =<< tokenize s
+    ":evalRPN" : _ -> liftIO $ print $ evalOrFree @(Either String) scope =<< fromRPN =<< tokenize s
+    ":parseS" : _ -> liftIO $ print $ fromS @(Either String) =<< tokenize s
+    ":evalS" : _ -> liftIO $ print $ evalOrFree @(Either String) scope =<< fromS =<< tokenize s
     ":help" : _ -> liftIO $ putStrLn help
     ":?" : _ -> liftIO $ putStrLn help
     _ : "=" : _ -> let
       s = intercalate " " $ drop 2 $ ws
-      expr = parse s
-      answer = evalScope scope =<< expr
-      in doCarefully s expr answer $ put $ M.insert (head ws) (fromRight undefined answer) scope
+      expr = parse @(Either String) s
+      answer = evalOrFree @(Either String) scope =<< expr
+      Right result = answer
+      in doCarefully s expr answer $ put $ M.insert (head ws) result scope
     _ ->  let
-      expr = parse line
-      answer = evalScope scope =<< expr
-      in doCarefully line expr answer $ liftIO $ putStrLn $ line ++ " = " ++ show (fromRight undefined answer)
+      expr = parse @(Either String) line
+      answer = evalOrFree @(Either String) scope =<< expr
+      Right result = answer
+      in doCarefully line expr answer $ liftIO $ putStrLn $ line ++ " = " ++ show result
 
 reportParseError :: [Char] -> [Char] -> IO ()
 reportParseError s err = putStrLn $ "Error while parsing expression at \"" ++ s ++ "\"\n\t" ++ err
@@ -202,8 +194,8 @@ help = "Available commands:\n" ++ (intercalate "\n" $ map ('\t':) $ [
   ]) ++ "\n"
 
 repl :: IO ()
-repl = void $ runStateT (processRepl @Double) defaultScope where
-  processRepl :: Parseable t => StateT (Scope t) IO ()
+repl = void $ runStateT processRepl fullDefaultScope where
+  processRepl :: StateT (Scope AParseable) IO ()
   processRepl = do
     line <- liftIO $ getLine
     unless (line `elem` ["", "quit", "exit", ":q", ":Q", ":quit", ":exit"] || all (== ' ') line) $ do
@@ -212,8 +204,8 @@ repl = void $ runStateT (processRepl @Double) defaultScope where
       processRepl
 
 evalFile :: FilePath -> IO ()
-evalFile filename = void $ runStateT (process @Double) defaultScope where
-  process :: Parseable t => StateT (Scope t) IO ()
+evalFile filename = void $ runStateT process fullDefaultScope where
+  process :: StateT (Scope AParseable) IO ()
   process = do
     content <- liftIO $ readFile filename
     forM_ (lines content) $ \line -> do

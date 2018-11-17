@@ -34,16 +34,27 @@ instance Functor Expr where
 data AnExpr = forall x. Parseable x => AnExpr (Expr x)
 instance Show AnExpr where show (AnExpr e) = show e
 
-safeExpr :: MonadError Error me => AnOp -> [(AnExpr, Maybe APType)] -> me ATypedExpr
+data FreeVar = FreeVar Name deriving (Show, Eq)
+
+captureFreeVar :: APType -> FreeVar -> ATypedExpr
+captureFreeVar apt@(APType pt) (FreeVar name) = pt2ate pt where
+  pt2ate :: forall x. Parseable x => Proxy x -> ATypedExpr
+  pt2ate _ = ATE $ TypedExpr @x (Var name) apt
+
+safeExpr :: MonadError Error me => AnOp -> [Either FreeVar ATypedExpr] -> me ATypedExpr
 safeExpr (AnOp op) es
   | length es /= arity op
   = throwError $ show op ++ " arity is " ++ show (arity op) ++ ", while supplied " ++ show (length es) ++ " args"
-  | not $ and $ zipWith cmpType (map snd es) (signature op)
-  = throwError $ show op ++ " signature is " ++ show (signature op) ++ ", but got " ++ show 0
+  | not $ and $ zipWith cmpType es (signature op)
+  = throwError $ show op ++ " signature is " ++ show (signature op) ++ ", but got " ++ show (map showType es)
   | otherwise
-  = return $ ATE $ flip TypedExpr (codomain op) $ Expr op $ zipWith ae2ate (map fst es) $ signature op where
-    cmpType Nothing _ = True
-    cmpType (Just t) apt = t == apt
+  = return $ ATE $ flip TypedExpr (codomain op) $ Expr op $ zipWith toATE es $ signature op where
+    cmpType (Left (FreeVar _)) _ = True
+    cmpType (Right (ATE (TypedExpr _ t))) apt = t == apt
+    showType (Left _) = "?"
+    showType (Right (ATE (TypedExpr _ t))) = show t
+    toATE (Right ate) _ = ate
+    toATE (Left (FreeVar name)) t = captureFreeVar t (FreeVar name)
 
 ae2ate :: AnExpr -> APType -> ATypedExpr
 ae2ate (AnExpr e) t = e2ate e t where
@@ -162,7 +173,7 @@ reifyAPT (APType p) = castable p where
   castable = cast
 
 data AParseable = forall x. Parseable x => AParseable x
-instance Show AParseable where show (AParseable p) = show p
+instance Show AParseable where show ap@(AParseable p) = show p ++ " : " ++ show (parseableType ap)
 instance Eq AParseable where
   AParseable a == AParseable b = let
     eq :: (Typeable a, Typeable b) => a -> b -> Maybe (a :~: b)
@@ -208,10 +219,8 @@ r = pType @Double
 b :: APType
 b = pType @Bool
 -- maybe use TH
-parseables :: [AParseable]
-parseables = [AParseable (undefined :: Double), AParseable (undefined :: Bool)]
 parseableTypes :: [APType]
-parseableTypes = map parseableType parseables
+parseableTypes = [r, b]
 
 funopD :: Name -> (Double -> Double) -> Op Double
 funopD name = op1 name r
@@ -265,3 +274,10 @@ ops = M.fromList $ map (name' &&& id) $ map generalize [
 opsFrom :: APType -> Scope AnOp
 opsFrom pt = M.filter sameFrom ops where
   sameFrom (AnOp op) = pt == domain op
+
+fullDefaultScope :: Scope AParseable
+fullDefaultScope = mconcat $ map getDefaultScope parseableTypes where
+  getDefaultScope :: APType -> Scope AParseable
+  getDefaultScope (APType t) = getDefaultScope' t
+  getDefaultScope' :: forall x. Parseable x => Proxy x -> Scope AParseable
+  getDefaultScope' _ = AParseable <$> defaultScope @x

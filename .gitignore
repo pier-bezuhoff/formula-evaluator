@@ -1,4 +1,6 @@
 .stack-work/
 formula-evaluator.cabal
 *~
+#*
+*#
 *emacs*
