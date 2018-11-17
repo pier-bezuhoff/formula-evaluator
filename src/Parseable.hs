@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 {-# LANGUAGE FlexibleContexts, AllowAmbiguousTypes #-}
 {-# LANGUAGE RankNTypes, ExistentialQuantification, ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase, PatternSynonyms, ViewPatterns #-}
@@ -29,6 +30,25 @@ instance Functor Expr where
     Val x -> Val $ f x
     Var name -> Var name
     Expr op exprs -> Expr (fmap f op) exprs
+
+data AnExpr = forall x. Parseable x => AnExpr (Expr x)
+instance Show AnExpr where show (AnExpr e) = show e
+
+safeExpr :: MonadError Error me => AnOp -> [(AnExpr, Maybe APType)] -> me ATypedExpr
+safeExpr (AnOp op) es
+  | length es /= arity op
+  = throwError $ show op ++ " arity is " ++ show (arity op) ++ ", while supplied " ++ show (length es) ++ " args"
+  | not $ and $ zipWith cmpType (map snd es) (signature op)
+  = throwError $ show op ++ " signature is " ++ show (signature op) ++ ", but got " ++ show 0
+  | otherwise
+  = return $ ATE $ flip TypedExpr (codomain op) $ Expr op $ zipWith ae2ate (map fst es) $ signature op where
+    cmpType Nothing _ = True
+    cmpType (Just t) apt = t == apt
+
+ae2ate :: AnExpr -> APType -> ATypedExpr
+ae2ate (AnExpr e) t = e2ate e t where
+  e2ate :: Parseable x => Expr x -> APType -> ATypedExpr
+  e2ate e t = ATE $ TypedExpr e t
 
 data TypedExpr x = Parseable x => TypedExpr { te :: Expr x, apt :: APType }
 instance Show x => Show (TypedExpr x) where
@@ -68,10 +88,19 @@ pattern Infix precedence <- (let
 
 -- signature should not be empty
 data Op y = Op { name :: Name, signature :: [APType], fun :: [AParseable] -> y, fixity :: Fixity }
-
 instance Show (Op y) where show op = name op
 instance Eq (Op y) where a == b = name a == name b -- forall x y. name should be unique
 instance Functor Op where fmap f op = op { fun = fmap f $ fun op }
+
+data AnOp = forall y. Parseable y => AnOp (Op y)
+instance Show AnOp where show (AnOp op) = show op
+instance Eq AnOp where
+  AnOp op == AnOp op' = let
+    eq :: (Typeable a, Typeable b) => a -> b -> Maybe (a :~: b)
+    eq _ _ = eqT
+    in case eq op op' of
+      Nothing -> False
+      Just refl -> gcastWith refl $ op == op'
 
 app :: MonadError Error me => Op y -> [AParseable] -> me y
 app op@(Op name pts fun _) ps
@@ -81,59 +110,81 @@ app op@(Op name pts fun _) ps
   = throwError $ "Actual signature " ++ show (map parseableType ps) ++ ", while expected " ++ show pts
   | otherwise = return $ fun ps
 
+name' :: AnOp -> Name
+name' (AnOp op) = name op
 arity :: Op y -> Arity
 arity op = case fixity op of
   Infix _ -> 2
   Prefix k -> k -- k <- [1..]
+arity' :: AnOp -> Arity
+arity' (AnOp op) = arity op
+fixity' :: AnOp -> Fixity
+fixity' (AnOp op) = fixity op
 precedence :: Op y -> Precedence
 precedence op = case fixity op of
   Infix n -> n -- n <- [2..9]
   Prefix _ -> 10
+precedence' :: AnOp -> Precedence
+precedence' (AnOp op) = precedence op
 domain :: Op y -> APType
 domain = head . signature
 codomain :: forall y. Parseable y => Op y -> APType
 codomain _ = APType (Proxy @y)
+codomain' :: AnOp -> APType
+codomain' (AnOp op) = codomain op
 
 -- short aliases for common ops, arity and signatures should be checked in `app`
 -- maybe use TH
 op1 :: Parseable a => Name -> APType -> (a -> y) -> Op y
 op1 name apt f = Op name [apt] f' (Prefix 1) where
-  f' [AParseable a] = f $ fromJust $ maybeCast a
+  f' [AParseable a] = f $ cast' a
 op2 :: (Parseable a, Parseable b) => Name -> APType -> APType -> (a -> b -> y) -> Fixity -> Op y
 op2 name apt1 apt2 f fixity = Op name [apt1,apt2] f' fixity where
-  f' [AParseable a, AParseable b] = fromJust (maybeCast a) `f` fromJust (maybeCast b)
+  f' [AParseable a, AParseable b] = cast' a `f` cast' b
 op3 :: (Parseable a, Parseable b, Parseable c) => Name -> APType -> APType -> APType -> (a -> b -> c -> y) -> Op y
 op3 name apt1 apt2 apt3 f = Op name [apt1,apt2,apt3] f' (Prefix 3) where
-  f' [AParseable a, AParseable b, AParseable c] = f (fromJust $ maybeCast a) (fromJust $ maybeCast b) (fromJust $ maybeCast c)
+  f' [AParseable a, AParseable b, AParseable c] = f (cast' a) (cast' b) (cast' c)
 
 
--- | AParseable |
+-- | Parseable |
+-- a parseable type
 data APType = forall x. Parseable x => APType (Proxy x)
 instance Show APType where show (APType p) = show $ typeRep p
 instance Eq APType where a == b = show a == show b
+
+pType :: forall x. Parseable x => APType
+pType = APType $ Proxy @x
+getType :: Parseable x => proxy x -> APType
+getType p = APType $ (const Proxy :: proxy x -> Proxy x) p
+reifyAPT :: forall x. Parseable x => APType -> Maybe (Proxy x)
+reifyAPT (APType p) = castable p where
+  castable :: (Parseable a, Parseable b) => Proxy a -> Maybe (Proxy b)
+  castable = cast
 
 data AParseable = forall x. Parseable x => AParseable x
 instance Show AParseable where show (AParseable p) = show p
 instance Eq AParseable where
   AParseable a == AParseable b = let
+    eq :: (Typeable a, Typeable b) => a -> b -> Maybe (a :~: b)
+    eq _ _ = eqT
     in case eq a b of
       Nothing -> False
       Just refl -> gcastWith refl $ a == b
 
-pType :: forall x. Parseable x => APType
-pType = APType $ Proxy @x
-eq :: (Typeable a, Typeable b) => a -> b -> Maybe (a :~: b)
-eq _ _ = eqT
 parseableType :: AParseable -> APType
 parseableType (AParseable p) = APType $ pure p
-getType :: Parseable x => proxy x -> APType
-getType p = APType $ (const Proxy :: proxy x -> Proxy x) p
-reifyAP :: Parseable x => AParseable -> Maybe x
-reifyAP (AParseable p) = maybeCast p
+apt2ap :: APType -> AParseable -- NOTE: hold undefined
+apt2ap (APType p) = AParseable $ instantiate p where
+  instantiate :: Proxy x -> x
+  instantiate Proxy = undefined
+reifyAP :: forall x. Parseable x => AParseable -> Maybe x
+reifyAP (AParseable p) = cast p
+
+-- use `fromJust`, types MUST be `cast`-able
+cast' :: (Parseable x, Parseable y) => x -> y
+cast' = fromJust . cast
 
 class (Typeable x, Eq x, Read x, Show x) => Parseable x where
-  maybeCast :: Parseable y => x -> Maybe y
-  maybeCast x = cast x
   defaultScope :: Scope x
   defaultScope = mempty
   eval :: MonadError Error me => TypedExpr x -> me x
@@ -152,7 +203,9 @@ instance Parseable Bool where
     ]
 
 
+r :: APType
 r = pType @Double
+b :: APType
 b = pType @Bool
 -- maybe use TH
 parseables :: [AParseable]
@@ -171,8 +224,8 @@ binopB :: Name -> (Bool -> Bool -> Bool) -> Precedence -> Op Bool
 binopB name bbb p = op2 name b b bbb (InfixL p)
 
 -- TODO: allow general (==), etc.
-ops :: Scope (Op AParseable)
-ops = M.fromList $ map (name &&& id) $ map generalize [
+ops :: Scope AnOp
+ops = M.fromList $ map (name' &&& id) $ map generalize [
   -- first list :: [Op Double]
   binopD "+" (+) 6,
   binopD "-" (-) 6,
@@ -206,9 +259,9 @@ ops = M.fromList $ map (name &&& id) $ map generalize [
   funopB "~" not,
   op3 "ifThenElse" b b b (\a b c -> if a then b else c)
   ] where
-  generalize :: Parseable x => Op x -> Op AParseable
-  generalize = fmap AParseable
+  generalize :: Parseable x => Op x -> AnOp
+  generalize = AnOp
 
-opsFrom :: APType -> Scope (Op AParseable)
+opsFrom :: APType -> Scope AnOp
 opsFrom pt = M.filter sameFrom ops where
-  sameFrom op = pt == domain op
+  sameFrom (AnOp op) = pt == domain op

@@ -1,9 +1,12 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE LambdaCase, PatternSynonyms, ViewPatterns #-}
 {-# LANGUAGE PatternGuards #-}
 module Parser where
 
 import Text.Read (readMaybe)
+import Data.Monoid (First(..))
+import Control.Arrow (first)
 import Data.Maybe
 import Data.Either
 import Data.Proxy
@@ -14,9 +17,16 @@ import Control.Monad.State
 import qualified Data.Map as M
 import Parseable
 
-data Token = L AParseable APType | V Name | O (Op AParseable) Precedence deriving Show
+-- L -> Val, V -> Var
+data Token = L AParseable APType | V Name | O AnOp Precedence deriving Show
+-- matchs L and V ([U]nary)
+pattern U token <- ((\token -> case token of L _ _ -> Just token; V _ -> Just token; _ -> Nothing) -> Just token)
+pattern O' s ts f fixity <- ((\(AnOp op) -> opParams op) -> (s, ts, f, fixity))
 
-tokenize :: MonadError Error me => Parseable x => String -> me [Token]
+opParams :: Parseable y => Op y -> (Name, [APType], [AParseable] -> AParseable, Fixity)
+opParams (Op s ts f fixity) = (s, ts, AParseable <$> f, fixity)
+
+tokenize :: MonadError Error me => String -> me [Token]
 tokenize = go 1 . split where
   split' [] w = if null w then [] else [w]
   split' (c:s) w
@@ -25,24 +35,23 @@ tokenize = go 1 . split where
     | otherwise = split' s (c : w)
   split s = map reverse $ split' s ""
   readMaybeAPT :: APType -> String -> Maybe AParseable
-  readMaybeAPT apt w = AParseable <$> case apt of
-    APType p -> readMaybeAs p w where
-      readMaybeAs :: Parseable x => Proxy x -> String -> Maybe x
-      readMaybeAs _ = readMaybe
-  detectType :: String -> Token
-  detectType w = case catMaybes $ map readMaybeAPT parseableTypes of
-    [] -> V w
-    apt:_ -> L (readMaybeAPT apt w) apt
-  go 1 [] = Right []
-  go _ [] = Left "brackets doesn't match"
+  readMaybeAPT (APType p) = readMaybeAs p where
+    readMaybeAs :: forall x. Parseable x => Proxy x -> String -> Maybe AParseable
+    readMaybeAs _ s = AParseable <$> readMaybe @x s
+  guessType :: String -> Token
+  guessType w = case foldMap (First . flip readMaybeAPT w) parseableTypes of
+    First Nothing -> V w
+    First (Just a) -> L a (parseableType a)
+  go 1 [] = return []
+  go _ [] = throwError "brackets doesn't match"
   go n (w:ws)
     | w == "(" = go (10 * n) ws -- NOTE: skip "()", "(())", ...
-    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else Left "brackets doesn't match"
+    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else throwError "brackets doesn't match"
     | otherwise = case M.lookup w ops of
-        Just op -> (O op (opPrecedence op * n) :) <$> go n ws
-        Nothing -> (L w :) <$> go n ws
+        Just op -> (O op (precedence' op * n) :) <$> go n ws
+        Nothing -> (guessType w :) <$> go n ws
 
-toRPN :: Parseable x => [Token x] -> Either Error [Token x]
+toRPN :: forall me. MonadError Error me => [Token] -> me [Token]
 toRPN = go mempty 0 where
   popMax :: Ord k => M.Map k [v] -> Maybe ((k, v), M.Map k [v])
   popMax m
@@ -58,16 +67,16 @@ toRPN = go mempty 0 where
     | (_, _:vs) <- M.findMax m
     = M.updateMax (const $ Just $ v:vs) m
 
-  go :: Parseable x => M.Map Precedence [(ExprOp x, Arity)] -> Arity -> [Token x] -> Either Error [Token x]
+  go :: M.Map Precedence [(AnOp, Arity)] -> Arity -> [Token] -> me [Token]
   go m 0 []
     | Just ((precedence, (op, _)), m') <- popMax m
-    = if M.null m' then Right [O op precedence]
+    = if M.null m' then return [O op precedence]
       else let
         Just ((_, (_, arity)), _) = popMax m'
         in (O op precedence :) <$> go m' arity []
   go m _ []
-    | M.null m = Right []
-  go m arity (l@(L _) : ts)
+    | M.null m = return []
+  go m arity (l@(U _) : ts)
     | not (M.null m) && arity == 0
     , Just ((maxN, (op, _)), m') <- popMax m
     = if M.null m'
@@ -77,7 +86,7 @@ toRPN = go mempty 0 where
         in (O op maxN :) . (l:) <$> go m' (pred k) ts
     | otherwise = (l:) <$> go m (pred arity) ts
   go m k (O op n : ts)
-    | M.null m = go (M.singleton n [(op, error "no matter")]) (k + opArity op) ts
+    | M.null m = go (M.singleton n [(op, error "no matter")]) (k + arity' op) ts
     | otherwise = let
       Just ((maxN, (maxOp, _)), m') = popMax m
       Just ((_, (maxOp', maxArity')), _) = popMax m'
@@ -85,46 +94,48 @@ toRPN = go mempty 0 where
       insertNew arity = insert n (op, arity)
       single = M.singleton n [(op, error "no matter")]
       in case maxN `compare` n of
-        EQ -> case fixity op of -- -
+        EQ -> case fixity' op of -- -
           -- IL{I}...
           InfixL _ -> prependMax <$> go (insertNew 1 m') 1 ts
-          InfixR _ -> case fixity maxOp of
+          InfixR _ -> case fixity' maxOp of
             InfixL _ -> prependMax <$> go (insertNew 1 m') 1 ts
             -- InfixR: special case: now >= 2 values in list at maxN
             InfixR _ -> go (insertNew 1 $ setMax (maxOp, 0) m) 1 ts
-            Prefix _ -> Left "infix and prefix ops cannot have the same fixity"
+            Prefix _ -> throwError "infix and prefix ops cannot have the same fixity"
           -- P...(PL...L)({P}...
           Prefix arity -> if M.null m'
-            then Left $ "not enough (< " ++ show arity ++ ") args for " ++ show op
+            then throwError $ "not enough (< " ++ show arity ++ ") args for " ++ show op
             else prependMax <$> go (insertNew arity $ setMax (maxOp', pred maxArity') m') arity ts
-        GT -> case fixity op of -- \
+        GT -> case fixity' op of -- \
           Infix _ -> prependMax <$> if M.null m'
             then go single 1 ts
             else go m' maxArity' (O op n : ts)
           Prefix arity -> if k == 0
             then prependMax <$> go m' (pred maxArity') (O op n : ts)
             else go (insertNew arity m) k ts -- maybe impossible
-        LT -> case fixity op of -- /
+        LT -> case fixity' op of -- /
           Infix _ -> go (insertNew 1 $ setMax (maxOp, k) m) 1 ts
           Prefix arity -> go (insertNew arity $ setMax (maxOp, pred k) m) arity ts
-  go _ _ _ = Left "bad syntax"
+  go _ _ _ = throwError "bad syntax"
 
-fromRPN :: Parseable x => [Token x] -> Either Error (Expr x)
+fromRPN :: forall me. MonadError Error me => [Token] -> me (Either AnExpr ATypedExpr)
 fromRPN = go [] where
-  fromL l = fromMaybe (Var l) $ Val <$> readMaybe l
-  grab op stack
-    | opArity op > length stack = const $ Left $ "not enough (< " ++ show (opArity op) ++ ") args for " ++ show op
-    | otherwise = case opArity op of
-      1 -> let (a:rest) = stack in go (Expr op [a] : rest)
-      2 -> let (b:a:rest) = stack in go (Expr op [a,b] : rest)
-      3 -> let (c:b:a:rest) = stack in go (Expr op [a,b,c] : rest)
-      arity -> const $ Left $ "unimplemented arity " ++ show arity ++ " for " ++ show op
-  go :: Read x => [Expr x] -> [Token x] -> Either Error (Expr x)
-  go [x] [] = Right x
-  go _ [] = Left "unexpected end of expression"
+  safeExpr' op es = splitET <$> safeExpr @me op es
+  splitET (ATE te) = let te2et (TypedExpr e t) = (e, Just t) in first AnExpr $ te2et te
+  go :: [(AnExpr, Maybe APType)] -> [Token] -> me (Either AnExpr ATypedExpr)
+  go [(e, mt)] [] = return $ case mt of
+    Nothing -> Left e
+    Just t -> Right $ ae2ate e t
+  go _ [] = throwError "unexpected end of expression"
   go stack (t:ts) = case t of
-    L l -> go (fromL l : stack) ts
-    O op _ -> grab op stack ts
+    L p apt -> go ((AnExpr $ Val p, Just apt) : stack) ts
+    V name -> go ((AnExpr $ Var name, Nothing) : stack) ts
+    O op _ -> if arity' op > length stack
+      then throwError $ "not enough (< " ++ show (arity' op) ++ ") args for " ++ show op
+      else let (start, rest) = splitAt (arity' op) stack
+        in do
+          e <- safeExpr' op (reverse start)
+          go (e : rest) ts
 
 parse :: Parseable x => String -> Either Error (Expr x)
 parse = fromRPN <=< toRPN <=< tokenize
@@ -136,15 +147,11 @@ parseRPN = go [] . words where
   go stack (s:rest) = let mv = readMaybe s in
     case mv of
       Just v -> go (Val v : stack) rest
-      Nothing -> let mop = M.lookup s ops in
-        case mop of
-          Nothing -> go (Var s : stack) rest
-          Just op ->
-            case opArity op of
-              1 -> let (a:xs) = stack in go (Expr op [a] : xs) rest
-              2 -> let (b:a:xs) = stack in go (Expr op [a,b] : xs) rest
-              3 -> let (c:b:a:xs) = stack in go (Expr op [a,b,c] : xs) rest
-              arity -> Left $ "not implemented arity " ++ show arity ++ " for " ++ show op
+      Nothing -> case  M.lookup s ops of
+        Nothing -> go (Var s : stack) rest
+        Just op -> let
+          (start, xs) = splitAt (arity op) stack
+          in go (Expr op (reverse start) : xs) rest
 
 parseS :: Parseable x => String -> Either Error (Expr x)
 parseS = error "not implemented yet"
@@ -172,7 +179,7 @@ processLine scope line = go where
       s = intercalate " " $ drop 2 $ ws
       expr = parse s
       answer = evalScope scope =<< expr
-      in doCarefully s expr answer $ put $ M.insert (ws !! 0) (fromRight undefined answer) scope
+      in doCarefully s expr answer $ put $ M.insert (head ws) (fromRight undefined answer) scope
     _ ->  let
       expr = parse line
       answer = evalScope scope =<< expr
