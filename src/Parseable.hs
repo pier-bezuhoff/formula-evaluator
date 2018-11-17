@@ -7,7 +7,7 @@ import Control.Arrow ((&&&))
 import Data.List (intercalate)
 import Data.Bits (xor)
 import Control.Monad.Except (MonadError, throwError)
-import Data.Maybe (isJust, fromJust)
+import Data.Maybe (fromJust)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (cast, typeRep, Typeable, eqT)
 import Data.Type.Equality ((:~:), gcastWith)
@@ -18,65 +18,46 @@ type Name = String
 type Error = String
 type Scope t = M.Map Name t
 
-data Expr x = Val x APType | Var Name APType | Expr (Op x) [Expr AParseable] APType
+data Expr x = Val x | Var Name  | Expr (Op x) [ATypedExpr]
 instance Show x => Show (Expr x) where
   show = \case -- show as sexp
-    Val x apt -> show x ++ " : " ++ show apt
-    Var name apt -> name ++ " : " ++ show apt
-    Expr op exprs apt -> "(" ++ show op ++ " " ++ intercalate " " (map show exprs) ++ ") : " ++ show apt
+    Val x -> show x
+    Var name -> name
+    Expr op exprs -> "(" ++ show op ++ " " ++ intercalate " " (map show exprs) ++ ")"
+instance Functor Expr where
+  fmap f = \case
+    Val x -> Val $ f x
+    Var name -> Var name
+    Expr op exprs -> Expr (fmap f op) exprs
 
-val :: forall x. Parseable x => x -> Expr x
-val v = Val v $ pType @x
+data TypedExpr x = Parseable x => TypedExpr { te :: Expr x, apt :: APType }
+instance Show x => Show (TypedExpr x) where
+  show (TypedExpr e apt) = "(" ++ show e ++ " : " ++ show apt ++ show ")"
 
-var :: forall x. Parseable x => Name -> Expr x
-var s = Var s $ pType @x
+inferType :: forall x. Parseable x => Expr x -> TypedExpr x
+inferType e = TypedExpr e $ pType @x
 
-expr :: forall x. Parseable x => Op x -> [Expr AParseable] -> Expr x
-expr op exprs = Expr op exprs $ pType @x
+data ATypedExpr = forall x. Parseable x => ATE (TypedExpr x)
+instance Show ATypedExpr where
+  show (ATE te) = show te
 
-exprType :: Expr x -> APType
-exprType = \case
-  Val _ apt -> apt
-  Var _ apt -> apt
-  Expr _ _ apt -> apt
-
-generalizeExpr :: Parseable x => Expr x -> Expr AParseable
-generalizeExpr = \case
-  Val x apt -> Val (AParseable x) apt
-  Var name apt -> Var name apt
-  Expr op exprs apt -> Expr (fmap AParseable op) exprs apt
--- NOTE: specialize :: Expr AParseable -> Maybe (Expr x) = gcast
-
-evalScope' :: MonadError Error me => Scope AParseable -> Expr AParseable -> me AParseable
-evalScope' m = \case
-  Val x _ -> return x
-  Var s apt -> case M.lookup s $ M.filter ((apt ==) . parseableType) m of
+evalScope' :: MonadError Error me => Scope AParseable -> ATypedExpr -> me AParseable
+evalScope' m (ATE (TypedExpr te apt)) = case te of
+  Val x -> return $ AParseable x
+  Var s -> case M.lookup s $ M.filter ((apt ==) . parseableType) m of
     Nothing -> throwError $ "variable " ++ s ++ " : " ++ show apt ++ " out of scope"
     Just x -> return x
-  Expr op xs _ -> app op =<< traverse (evalScope' m) xs
+  Expr op xs -> fmap AParseable $ app op =<< traverse (evalScope' m) xs
 
--- QUESTION: maybe useless
-evalScope :: forall x me. (Parseable x, MonadError Error me) => Scope AParseable -> Expr x -> me x
-evalScope m = \case
-  Val x _ -> return x
-  Var var apt -> case M.lookup var (scopeOf @x m) of
-    Nothing -> throwError $ "variable " ++ var ++ " : " ++ show apt ++ " out of scope"
-    Just x -> return x
-  Expr op xs _ -> app op =<< traverse (evalScope' m) xs
+evalScope :: (Parseable x, MonadError Error me) => Scope AParseable -> TypedExpr x -> me x
+evalScope m (TypedExpr e apt) = fromJust . reifyAP <$> evalScope' m (ATE $ TypedExpr e apt)
 
--- WARNING: likely wrong (cast)
-scopeOf :: forall x. Parseable x => Scope AParseable -> Scope x
-scopeOf = mCatMaybes . fmap cast
-
-mCatMaybes :: M.Map k (Maybe x) -> M.Map k x
-mCatMaybes = fmap fromJust . M.filter (isJust)
 
 -- | Op |
 type Precedence = Int -- [2..9]
 type Arity = Int -- [1..], number of args
 -- Infix => arity == 2
-data Fixity = InfixL Precedence | InfixR Precedence | Prefix Arity
-  deriving (Show, Eq, Ord)
+data Fixity = InfixL Precedence | InfixR Precedence | Prefix Arity deriving (Show, Eq, Ord)
 pattern Infix :: Precedence -> Fixity
 pattern Infix precedence <- (let
   f = \case
@@ -113,23 +94,17 @@ domain = head . signature
 codomain :: forall y. Parseable y => Op y -> APType
 codomain _ = APType (Proxy @y)
 
-listify1 ab [a] = ab a
-listify2 abc [a,b] = abc a b
-listify3 abcd [a,b,c] = abcd a b c
--- short aliases for common ops
-funop name pts f = Op name pts (listify1 f . fromJust . cast) (Prefix 1)
-bifunop name pts f = Op name pts (listify2 $ cast2 f) (Prefix 2)
-trifunop name pts f = Op name pts (listify3 $ cast3 f) (Prefix 2)
-binop name pts f p = Op name pts (listify2 $ cast2 f) (InfixL p)
-binopL name pts f = binop name pts f
-binopR name pts f p = Op name pts (listify2 $ cast2 f) (InfixR p)
--- -- `fromJust` here are safe, because `app` check type matching
--- TODO: WRONG CASTS!!!!!
--- TODO: use `eq`, `gcastWith`, etc.
-cast2 :: (Parseable a, Parseable b) => (a -> b -> y) -> AParseable -> AParseable -> y
-cast2 f pa pb = fromJust (cast pa) `f` fromJust (cast pb)
-cast3 :: (Parseable a, Parseable b, Parseable c) => (a -> b -> c -> y) -> AParseable -> AParseable -> AParseable -> y
-cast3 f a b c = f (fromJust $ cast a) (fromJust $ cast b) (fromJust $ cast b)
+-- short aliases for common ops, arity and signatures should be checked in `app`
+-- maybe use TH
+op1 :: Parseable a => Name -> APType -> (a -> y) -> Op y
+op1 name apt f = Op name [apt] f' (Prefix 1) where
+  f' [AParseable a] = f $ fromJust $ maybeCast a
+op2 :: (Parseable a, Parseable b) => Name -> APType -> APType -> (a -> b -> y) -> Fixity -> Op y
+op2 name apt1 apt2 f fixity = Op name [apt1,apt2] f' fixity where
+  f' [AParseable a, AParseable b] = fromJust (maybeCast a) `f` fromJust (maybeCast b)
+op3 :: (Parseable a, Parseable b, Parseable c) => Name -> APType -> APType -> APType -> (a -> b -> c -> y) -> Op y
+op3 name apt1 apt2 apt3 f = Op name [apt1,apt2,apt3] f' (Prefix 3) where
+  f' [AParseable a, AParseable b, AParseable c] = f (fromJust $ maybeCast a) (fromJust $ maybeCast b) (fromJust $ maybeCast c)
 
 
 -- | AParseable |
@@ -144,6 +119,7 @@ instance Eq AParseable where
     in case eq a b of
       Nothing -> False
       Just refl -> gcastWith refl $ a == b
+
 pType :: forall x. Parseable x => APType
 pType = APType $ Proxy @x
 eq :: (Typeable a, Typeable b) => a -> b -> Maybe (a :~: b)
@@ -152,12 +128,16 @@ parseableType :: AParseable -> APType
 parseableType (AParseable p) = APType $ pure p
 getType :: Parseable x => proxy x -> APType
 getType p = APType $ (const Proxy :: proxy x -> Proxy x) p
+reifyAP :: Parseable x => AParseable -> Maybe x
+reifyAP (AParseable p) = maybeCast p
 
 class (Typeable x, Eq x, Read x, Show x) => Parseable x where
+  maybeCast :: Parseable y => x -> Maybe y
+  maybeCast x = cast x
   defaultScope :: Scope x
   defaultScope = mempty
-  eval :: MonadError Error me => Expr x -> me x
-  eval = evalScope $ fmap AParseable (defaultScope @x)
+  eval :: MonadError Error me => TypedExpr x -> me x
+  eval = evalScope $ AParseable <$> defaultScope @x
 
 instance Parseable Double where
   defaultScope = M.fromList [
@@ -171,6 +151,9 @@ instance Parseable Bool where
     ("false", False)
     ]
 
+
+r = pType @Double
+b = pType @Bool
 -- maybe use TH
 parseables :: [AParseable]
 parseables = [AParseable (undefined :: Double), AParseable (undefined :: Bool)]
@@ -178,17 +161,15 @@ parseableTypes :: [APType]
 parseableTypes = map parseableType parseables
 
 funopD :: Name -> (Double -> Double) -> Op Double
-funopD = flip funop [r]
+funopD name = op1 name r
 binopD :: Name -> (Double -> Double -> Double) -> Precedence -> Op Double
-binopD = flip binop [r, r]
+binopD name rrr p = op2 name r r rrr (InfixL p)
 
 funopB :: Name -> (Bool -> Bool) -> Op Bool
-funopB = flip funop [b]
+funopB name = op1 name b
 binopB :: Name -> (Bool -> Bool -> Bool) -> Precedence -> Op Bool
-binopB = flip binop [b, b]
+binopB name bbb p = op2 name b b bbb (InfixL p)
 
-r = pType @Double
-b = pType @Bool
 -- TODO: allow general (==), etc.
 ops :: Scope (Op AParseable)
 ops = M.fromList $ map (name &&& id) $ map generalize [
@@ -197,7 +178,7 @@ ops = M.fromList $ map (name &&& id) $ map generalize [
   binopD "-" (-) 6,
   binopD "*" (*) 7,
   binopD "/" (/) 7,
-  binopR "^" [r, r] (**) 8 :: Op Double,
+  op2 "^" r r (**) (InfixR 8),
   funopD "sqrt" sqrt,
   funopD "~" negate,
   funopD "sin" sin,
@@ -206,12 +187,12 @@ ops = M.fromList $ map (name &&& id) $ map generalize [
   funopD "cosh" cosh,
   funopD "exp" exp,
   funopD "ln" log,
-  bifunop "log" [r, r, r] logBase,
-  trifunop "ifThenElse" [b, r, r] (\a b c -> if a then b else c)
+  op2 "log" r r logBase (Prefix 2),
+  op3 "ifThenElse" b r r (\a b c -> if a then b else c)
   ] ++ map generalize [
   -- second list :: [Op Bool]
-  binop "==" [r, r] ((==) :: Double -> Double -> Bool) 6,
-  binop "!=" [r, r] ((/=) :: Double -> Double -> Bool) 6,
+  op2 "==" r r ((==) :: Double -> Double -> Bool) (InfixL 6),
+  op2 "!=" r r ((/=) :: Double -> Double -> Bool) (InfixL 6),
 
   binopB "and" (&&) 3,
   binopB "&&" (&&) 3,
@@ -223,7 +204,7 @@ ops = M.fromList $ map (name &&& id) $ map generalize [
   funopB "not" not,
   funopB "!" not,
   funopB "~" not,
-  trifunop "ifThenElse" [b, b, b] (\a b c -> if a then b else c) :: Op Bool
+  op3 "ifThenElse" b b b (\a b c -> if a then b else c)
   ] where
   generalize :: Parseable x => Op x -> Op AParseable
   generalize = fmap AParseable
