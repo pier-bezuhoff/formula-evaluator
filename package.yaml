@@ -27,6 +27,7 @@ dependencies:
 - containers # Data.Map
 - mtl
 - template-haskell
+- list-t # also there is ListT
 
 library:
   source-dirs: src
@@ -34,6 +35,7 @@ library:
 executables:
   formula-evaluator-exe:
     main:                Main.hs
+    other-modules: []
     source-dirs:         app
     ghc-options:
     - -threaded
@@ -43,6 +45,7 @@ executables:
     - formula-evaluator
   formula-evaluator-repl-exe:
     main: REPL.hs
+    other-modules: []
     source-dirs: app
     ghc-options:
     - -threaded

@@ -4,23 +4,25 @@
 {-# LANGUAGE PatternGuards #-}
 module Parser where
 import Text.Read (readMaybe)
-import Data.Monoid (First(..))
-import Data.Proxy
+import Data.Proxy (Proxy(..))
+import Data.Maybe
+import Data.List.NonEmpty hiding (map, reverse, splitAt, length)
+import qualified Data.List.NonEmpty as NEL
 import Control.Monad
 import Control.Monad.Except
 import qualified Data.Map as M
 import Parseable
 
--- TODO: Token: O -> O [(AnOp, Precedence)] : op should be chosen after type check
--- L -> Val, V -> Var
-data Token = L AParseable APType | V Name | O AnOp Precedence deriving Show
+-- L -> Val with one of types, V -> Var, O -> one of ops with fixed name
+data Token = L AParseable | V Name | O AnOp Precedence deriving Show
 -- matchs L and V ([U]nary)
-pattern U token <- ((\token -> case token of L _ _ -> Just token; V _ -> Just token; _ -> Nothing) -> Just token)
+pattern U token <- ((\token -> case token of L _ -> Just token; V _ -> Just token; _ -> Nothing) -> Just token)
 
 opParams :: Parseable y => Op y -> (Name, [APType], [AParseable] -> AParseable, Fixity)
 opParams (Op s ts f fixity) = (s, ts, AParseable <$> f, fixity)
 
-tokenize :: MonadError Error me => String -> me [Token]
+-- try different strategies of parsing
+tokenize :: forall me. MonadError Error me => String -> [me [Token]]
 tokenize = go 1 . split where
   split' [] w = if null w then [] else [w]
   split' (c:s) w
@@ -33,17 +35,22 @@ tokenize = go 1 . split where
     readMaybeAs :: forall x. Parseable x => Proxy x -> String -> Maybe AParseable
     readMaybeAs _ s = AParseable <$> readMaybe @x s
   guessType :: String -> Token
-  guessType w = case foldMap (First . flip readMaybeAPT w) parseableTypes of
-    First Nothing -> V w -- maybe change First to All, and have some variants
-    First (Just a) -> L a (parseableType a)
-  go 1 [] = return []
-  go _ [] = throwError "brackets doesn't match"
+  guessType w = case foldMap (maybeToList . flip readMaybeAPT w) parseableTypes of
+    [] -> V w
+    a:_ -> L a
+  go :: Precedence -> [String] -> [me [Token]]
+  go 1 [] = return $ return []
+  go _ [] = return $ throwError "brackets doesn't match"
   go n (w:ws)
     | w == "(" = go (10 * n) ws -- NOTE: skip "()", "(())", ...
-    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else throwError "brackets doesn't match"
-    | otherwise = case M.lookup w fullOpScope of
-        Just op -> (O op (precedence' op * n) :) <$> go n ws
-        Nothing -> (guessType w :) <$> go n ws
+    | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else return $ throwError "brackets doesn't match"
+    | otherwise = case withNameInScope w fullOpScope of
+        [] -> (fmap (guessType w :)) <$> go n ws -- prepend inside outer [] and MonadError
+        -- here all possible ops are parsed
+        ops -> do
+          op <- ops
+          goVariant <- go n ws
+          return $ (O op (precedence' op * n) :) <$> goVariant
 
 toRPN :: forall me. MonadError Error me => [Token] -> me [Token]
 toRPN = go mempty 0 where
@@ -114,15 +121,15 @@ toRPN = go mempty 0 where
 
 fromRPN :: forall me. MonadError Error me => [Token] -> me (Either FreeVar ATypedExpr)
 fromRPN = go [] where
-  ap2ate :: APType -> AParseable -> ATypedExpr
-  ap2ate apt (AParseable p) = p2ate p where
-    p2ate :: Parseable x => x -> ATypedExpr
-    p2ate p = ATE $ TypedExpr (Val p) apt
+  ap2ate :: AParseable -> ATypedExpr
+  ap2ate (AParseable p) = p2ate p where
+    p2ate :: forall x. Parseable x => x -> ATypedExpr
+    p2ate p = ATE $ TypedExpr (Val p) $ pType @x
   go :: [Either FreeVar ATypedExpr] -> [Token] -> me (Either FreeVar ATypedExpr)
   go [e] [] = return e
   go _ [] = throwError "unexpected end of expression"
   go stack (t:ts) = case t of
-    L p apt -> go (Right (ap2ate apt p) : stack) ts
+    L p -> go (Right (ap2ate p) : stack) ts
     V name -> go (Left (FreeVar name) : stack) ts
     O op _ -> if arity' op > length stack
       then throwError $ "not enough (< " ++ show (arity' op) ++ ") args for " ++ show op
@@ -134,5 +141,7 @@ fromRPN = go [] where
 fromS :: forall me. MonadError Error me => [Token] -> me (Either FreeVar ATypedExpr)
 fromS = undefined
 
-parse :: MonadError Error me => String -> me (Either FreeVar ATypedExpr)
-parse = fromRPN <=< toRPN <=< tokenize
+parse :: MonadError Error me => String -> [me (Either FreeVar ATypedExpr)]
+parse s = do
+  tsVariant <- tokenize s
+  return $ fromRPN =<< toRPN =<< tsVariant

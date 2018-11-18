@@ -3,7 +3,6 @@
 {-# LANGUAGE LambdaCase, PatternSynonyms, ViewPatterns #-}
 {-# LANGUAGE TypeApplications, TypeOperators #-}
 module Parseable where
-import Control.Arrow ((&&&))
 import Data.List (intercalate)
 import Data.Bits (xor)
 import Control.Monad.Except (MonadError, throwError)
@@ -102,6 +101,9 @@ instance Show (Op y) where show op = name op
 instance Eq (Op y) where a == b = name a == name b -- forall x y. name should be unique
 instance Functor Op where fmap f op = op { fun = fmap f $ fun op }
 
+prettyO :: forall y. Parseable y => Op y -> String
+prettyO (Op name signature _ fixity) = name ++ " : " ++ show signature ++ " -> " ++ show (pType @y) ++ " {" ++ show fixity ++ "}"
+
 data AnOp = forall y. Parseable y => AnOp (Op y)
 instance Show AnOp where show (AnOp op) = show op
 instance Eq AnOp where
@@ -112,11 +114,14 @@ instance Eq AnOp where
       Nothing -> False
       Just refl -> gcastWith refl $ op == op'
 
+prettyAO :: AnOp -> String
+prettyAO (AnOp op) = prettyO op
+
 anOp :: Parseable y => Op y -> AnOp
 anOp = AnOp
 
 app :: MonadError Error me => Op y -> [AParseable] -> me y
-app op@(Op name pts fun _) ps
+app op@(Op _ pts fun _) ps
   | length ps /= arity op
   = throwError $ show (length ps) ++ " args, but expected " ++ show (arity op)
   | or $ zipWith (/=) pts (map parseableType ps)
@@ -164,6 +169,7 @@ op3 name f = Op name [pType @a, pType @b, pType @c] f' (Prefix 3) where
 data APType = forall x. Parseable x => APType (Proxy x)
 instance Show APType where show (APType p) = show $ typeRep p
 instance Eq APType where a == b = show a == show b
+instance Ord APType where a `compare` b = show a `compare` show b
 
 pType :: forall x. Parseable x => APType
 pType = APType $ Proxy @x
@@ -205,17 +211,25 @@ cast' = fromJust . cast
 eval :: forall x me. (Parseable x, MonadError Error me) => TypedExpr x -> me x
 eval = evalScope $ AParseable <$> defaultScope @x
 
+type TypedScope = M.Map (String, [APType])
+-- parametrised by name, domain and codomain
+typedAOScope :: [AnOp] -> TypedScope AnOp
+typedAOScope = M.fromList . map (\(AnOp op) -> ((name op, getType op : signature op), AnOp op))
+
+withNameInScope :: String -> TypedScope x -> [x]
+withNameInScope key = M.elems . M.filterWithKey (\(name, _) _ -> name == key)
+
 class (Typeable x, Eq x, Read x, Show x) => Parseable x where
   defaultScope :: Scope x
   defaultScope = mempty
-  defaultOpScope :: proxy x -> Scope AnOp
-  defaultOpScope _ = M.fromList $ map (name' &&& id) $ map anOp [
+  defaultOpScope :: proxy x -> TypedScope AnOp
+  defaultOpScope _ = typedAOScope $ map anOp [
     op2 @x @x "==" (==) (InfixL 6),
     op2 @x @x "!=" (/=) (InfixL 6)
     ] ++ map anOp [
     op3 @Bool @x @x "ifThenElse" (\a b c -> if a then b else c)
     ]
-  opScope :: proxy x -> Scope AnOp
+  opScope :: proxy x -> TypedScope AnOp
   opScope _ = mempty
 
 instance Parseable Double where
@@ -223,7 +237,7 @@ instance Parseable Double where
     ("e", exp 1),
     ("pi", pi)
     ]
-  opScope _ = M.fromList $ map (name' &&& id) $ map (anOp :: Op Double -> AnOp) [
+  opScope _ = typedAOScope $ map (anOp :: Op Double -> AnOp) [
     op2 "+" (+) (InfixL 6),
     op2 "-" (-) (InfixL 6),
     op2 "*" (*) (InfixL 7),
@@ -245,7 +259,7 @@ instance Parseable Bool where
     ("true", True),
     ("false", False)
     ]
-  opScope _ = M.fromList $ map (name' &&& id) $ map (anOp :: Op Bool -> AnOp) [
+  opScope _ = typedAOScope $ map (anOp :: Op Bool -> AnOp) [
     op2 "and" (&&) (InfixL 3),
     op2 "&&" (&&) (InfixL 3),
     op2 "or" (||) (InfixL 2),
@@ -257,8 +271,8 @@ instance Parseable Bool where
     ]
 
 -- TODO: add more generic Op domain
-genericOpScope :: Scope AnOp
-genericOpScope = M.fromList $ map (name' &&& id) $ map (anOp :: Op Bool -> AnOp) []
+genericOpScope :: TypedScope AnOp
+genericOpScope = typedAOScope $ map (anOp :: Op Bool -> AnOp) []
   -- Op "===" [Wildcard, Wildcard] (\[a,b] -> a == b) (InfixL 6),
   -- Op "!==" [Wildcard, Wildcard] (\[a,b] -> a /= b) (InfixL 6)
   -- ]
@@ -267,10 +281,6 @@ genericOpScope = M.fromList $ map (name' &&& id) $ map (anOp :: Op Bool -> AnOp)
 parseableTypes :: [APType]
 parseableTypes = [pType @Double, pType @Bool]
 
-opsFrom :: APType -> Scope AnOp
-opsFrom pt = M.filter sameFrom fullOpScope where
-  sameFrom (AnOp op) = pt == domain op
-
 fullDefaultScope :: Scope AParseable
 fullDefaultScope = mconcat $ map getDefaultScope parseableTypes where
   getDefaultScope :: APType -> Scope AParseable
@@ -278,7 +288,7 @@ fullDefaultScope = mconcat $ map getDefaultScope parseableTypes where
   getDefaultScope' :: forall x. Parseable x => Proxy x -> Scope AParseable
   getDefaultScope' _ = AParseable <$> defaultScope @x
 
-fullOpScope :: Scope AnOp
+fullOpScope :: TypedScope AnOp
 fullOpScope = genericOpScope `mappend` foldMap (\(APType t) -> opsOf t) parseableTypes where
-  opsOf :: Parseable x => Proxy x -> Scope AnOp
+  opsOf :: Parseable x => Proxy x -> TypedScope AnOp
   opsOf p = defaultOpScope p `mappend` opScope p

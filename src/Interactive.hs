@@ -9,6 +9,7 @@ module Interactive where
 import qualified Data.Map as M
 import Data.List
 import Control.Monad
+import Control.Applicative
 import Control.Monad.Except
 import Control.Monad.State
 import Parseable
@@ -34,7 +35,17 @@ instance MonadError e (Err e) where
   throwError = Err
   Err e `catchError` h = h e
   X x `catchError` _ = X x
+instance Alternative (Err String) where
+  empty = Err "no alternatives"
+  X x <|> _ = X x
+  Err _ <|> a = a
 
+bestVariant :: [ErrS x] -> ErrS x
+bestVariant vars = case foldl (<|>) empty vars of
+  X x -> X x
+  Err desc
+    | length vars > 1 -> Err $ "one of the following  errors occurs:" ++ concatMap (\(Err desc) -> "\n\t" ++ desc) vars
+    | otherwise -> Err desc
 
 processLine :: Scope AParseable -> String -> StateT (Scope AParseable) IO ()
 processLine scope line = go where
@@ -57,29 +68,34 @@ processLine scope line = go where
       Nothing -> throwError $ "unknown free var " ++ name
       Just ap -> return $ ap
     Right ate -> evalScope' scope ate
+  printBest :: (Show x, MonadIO io) => [ErrS x] -> io ()
+  printBest = liftIO . print . bestVariant
   go = case ws of
-    ":tokenize" : _ -> liftIO $ print $ tokenize @ErrS s
-    ":toRPN" : _ -> liftIO $ print $ toRPN @ErrS =<< tokenize s
-    ":parse" : _ -> liftIO $ print $ parse @ErrS s
-    ":p" : _ -> liftIO $ print $ parse @ErrS s
-    ":parseRPN" : _ -> liftIO $ print $ fromRPN @ErrS =<< tokenize s
-    ":evalRPN" : _ -> liftIO $ print $ evalOrFree @ErrS scope =<< fromRPN =<< tokenize s
-    ":parseS" : _ -> liftIO $ print $ fromS @ErrS =<< tokenize s
-    ":evalS" : _ -> liftIO $ print $ evalOrFree @ErrS scope =<< fromS =<< tokenize s
-    ":type" : _ -> liftIO $ print $ infer scope <$> parse @ErrS s
-    ":t" : _ -> liftIO $ print $ infer scope <$> parse @ErrS s
+    ":tokenize" : _ -> printBest $ tokenize s
+    ":toRPN" : _ -> printBest $ (toRPN =<<) <$> tokenize s
+    ":parse" : _ -> printBest $ parse s
+    ":p" : _ -> printBest $ parse s
+    ":parseRPN" : _ -> printBest $ (fromRPN =<<) <$> tokenize s
+    ":evalRPN" : _ -> printBest $ ((evalOrFree scope <=< fromRPN) =<<) <$> tokenize s
+    ":parseS" : _ -> printBest $ (fromS =<<) <$> tokenize s
+    ":evalS" : _ -> printBest $ ((evalOrFree scope <=< fromS) =<<) <$> tokenize s
+    ":type" : _ -> printBest $ (infer scope <$>) <$> parse s
+    ":t" : _ -> printBest $ (infer scope <$>) <$> parse s
+    ":vars" : _ -> liftIO $ forM_ (M.toList scope) $ \(name, value) -> putStrLn (name ++ " = " ++ show value)
+    ":ops" : _ -> liftIO $ print $ nub $ map fst $ M.keys fullOpScope
+    ":typedOps" : _ -> liftIO $ forM_ (M.elems fullOpScope) $ putStrLn . prettyAO
     ":help" : _ -> liftIO $ putStrLn help
     ":h" : _ -> liftIO $ putStrLn help
     ":?" : _ -> liftIO $ putStrLn help
     _ : "=" : _ -> let
       s = intercalate " " $ drop 2 $ ws
-      expr = parse @ErrS s
-      answer = evalOrFree @ErrS scope =<< expr
+      expr = bestVariant $ parse s
+      answer = evalOrFree scope =<< expr
       X result = answer
       in doCarefully s expr answer $ put $ M.insert (head ws) result scope
     _ ->  let
-      expr = parse @ErrS line
-      answer = evalOrFree @ErrS scope =<< expr
+      expr = bestVariant $ parse line
+      answer = evalOrFree scope =<< expr
       X result = answer
       in doCarefully line expr answer $ liftIO $ putStrLn $ line ++ " = " ++ show result
 
