@@ -54,14 +54,9 @@ safeExpr (AnOp op) es
     toATE (Right ate) _ = ate
     toATE (Left (FreeVar name)) t = captureFreeVar t (FreeVar name)
 
-ae2ate :: AnExpr -> APType -> ATypedExpr
-ae2ate (AnExpr e) t = e2ate e t where
-  e2ate :: Parseable x => Expr x -> APType -> ATypedExpr
-  e2ate e t = ATE $ TypedExpr e t
-
 data TypedExpr x = Parseable x => TypedExpr { te :: Expr x, apt :: APType }
 instance Show x => Show (TypedExpr x) where
-  show (TypedExpr e apt) = "(" ++ show e ++ " : " ++ show apt ++ ")"
+  show (TypedExpr e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
 
 inferType :: forall x. Parseable x => Expr x -> TypedExpr x
 inferType e = TypedExpr e $ pType @x
@@ -71,15 +66,15 @@ instance Show ATypedExpr where
   show (ATE te) = show te
 
 evalScope' :: MonadError Error me => Scope AParseable -> ATypedExpr -> me AParseable
-evalScope' m (ATE (TypedExpr te apt)) = case te of
+evalScope' m (ATE (TypedExpr te t)) = case te of
   Val x -> return $ AParseable x
-  Var s -> case M.lookup s $ M.filter ((apt ==) . parseableType) m of
-    Nothing -> throwError $ "variable " ++ s ++ " : " ++ show apt ++ " out of scope"
+  Var s -> case M.lookup s $ M.filter ((t ==) . parseableType) m of
+    Nothing -> throwError $ "variable " ++ s ++ " : " ++ show t ++ " out of scope"
     Just x -> return x
   Expr op xs -> fmap AParseable $ app op =<< traverse (evalScope' m) xs
 
 evalScope :: (Parseable x, MonadError Error me) => Scope AParseable -> TypedExpr x -> me x
-evalScope m (TypedExpr e apt) = fromJust . reifyAP <$> evalScope' m (ATE $ TypedExpr e apt)
+evalScope m (TypedExpr e t) = fromJust . reifyAP <$> evalScope' m (ATE $ TypedExpr e t)
 
 
 -- | Op |
@@ -212,7 +207,7 @@ eval :: forall x me. (Parseable x, MonadError Error me) => TypedExpr x -> me x
 eval = evalScope $ AParseable <$> defaultScope @x
 
 type TypedScope = M.Map (String, [APType])
--- parametrised by name, domain and codomain
+-- parametrized by name, domain and codomain
 typedAOScope :: [AnOp] -> TypedScope AnOp
 typedAOScope = M.fromList . map (\(AnOp op) -> ((name op, getType op : signature op), AnOp op))
 

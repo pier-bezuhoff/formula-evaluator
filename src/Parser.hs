@@ -6,20 +6,15 @@ module Parser where
 import Text.Read (readMaybe)
 import Data.Proxy (Proxy(..))
 import Data.Maybe
-import Data.List.NonEmpty hiding (map, reverse, splitAt, length)
-import qualified Data.List.NonEmpty as NEL
-import Control.Monad
 import Control.Monad.Except
 import qualified Data.Map as M
 import Parseable
 
--- L -> Val with one of types, V -> Var, O -> one of ops with fixed name
+-- L -> Val, V -> Var, O -> Op and current precedence (counting brackets)
 data Token = L AParseable | V Name | O AnOp Precedence deriving Show
 -- matchs L and V ([U]nary)
+pattern U :: Token -> Token
 pattern U token <- ((\token -> case token of L _ -> Just token; V _ -> Just token; _ -> Nothing) -> Just token)
-
-opParams :: Parseable y => Op y -> (Name, [APType], [AParseable] -> AParseable, Fixity)
-opParams (Op s ts f fixity) = (s, ts, AParseable <$> f, fixity)
 
 -- try different strategies of parsing
 tokenize :: forall me. MonadError Error me => String -> [me [Token]]
