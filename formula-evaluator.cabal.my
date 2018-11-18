@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 15d38db3d05b34561d3342479dcbbed68d353281e270ec7dbc5e4f14e9f6c7c6
+-- hash: 12234818d75987ceca1f94b75e9e5907127eaaeb0978ff8a6f79884b8fcfe0f9
 
 name:           formula-evaluator
 version:        0.1.0.0
@@ -26,8 +26,9 @@ source-repository head
 
 library
   exposed-modules:
-      Expr
+      Parseable
       Parser
+      Interactive
   other-modules:
       Paths_formula_evaluator
   hs-source-dirs:
@@ -37,11 +38,13 @@ library
       base >=4.7 && <5
     , containers
     , mtl
+    , template-haskell
   default-language: Haskell2010
 
 executable formula-evaluator-exe
   main-is: Main.hs
   other-modules:
+      Interactive
       Paths_formula_evaluator
   hs-source-dirs:
       app
@@ -51,11 +54,13 @@ executable formula-evaluator-exe
     , containers
     , formula-evaluator
     , mtl
+    , template-haskell
   default-language: Haskell2010
 
 executable formula-evaluator-repl-exe
   main-is: REPL.hs
   other-modules:
+      Interactive
       Paths_formula_evaluator
   hs-source-dirs:
       app
@@ -65,6 +70,7 @@ executable formula-evaluator-repl-exe
     , containers
     , formula-evaluator
     , mtl
+    , template-haskell
   default-language: Haskell2010
 
 test-suite formula-evaluator-test
@@ -80,4 +86,5 @@ test-suite formula-evaluator-test
     , containers
     , formula-evaluator
     , mtl
+    , template-haskell
   default-language: Haskell2010

@@ -1,5 +1,5 @@
 module Main where
-import Parser (evalFile)
+import Interactive (evalFile)
 
 main :: IO ()
 main = evalFile "test/example.txt"

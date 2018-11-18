@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 {-# LANGUAGE FlexibleContexts, AllowAmbiguousTypes #-}
 {-# LANGUAGE RankNTypes, ExistentialQuantification, ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase, PatternSynonyms, ViewPatterns #-}
@@ -46,13 +45,13 @@ safeExpr (AnOp op) es
   | length es /= arity op
   = throwError $ show op ++ " arity is " ++ show (arity op) ++ ", while supplied " ++ show (length es) ++ " args"
   | not $ and $ zipWith cmpType es (signature op)
-  = throwError $ show op ++ " signature is " ++ show (signature op) ++ ", but got " ++ show (map showType es)
+  = throwError $ show op ++ " signature is " ++ show (signature op) ++ ", but got " ++ show (map toMAPT es)
   | otherwise
   = return $ ATE $ flip TypedExpr (codomain op) $ Expr op $ zipWith toATE es $ signature op where
     cmpType (Left (FreeVar _)) _ = True
     cmpType (Right (ATE (TypedExpr _ t))) apt = t == apt
-    showType (Left _) = "?"
-    showType (Right (ATE (TypedExpr _ t))) = show t
+    toMAPT (Left _) = Wildcard
+    toMAPT (Right (ATE (TypedExpr _ t))) = APT t
     toATE (Right ate) _ = ate
     toATE (Left (FreeVar name)) t = captureFreeVar t (FreeVar name)
 
@@ -63,7 +62,7 @@ ae2ate (AnExpr e) t = e2ate e t where
 
 data TypedExpr x = Parseable x => TypedExpr { te :: Expr x, apt :: APType }
 instance Show x => Show (TypedExpr x) where
-  show (TypedExpr e apt) = "(" ++ show e ++ " : " ++ show apt ++ show ")"
+  show (TypedExpr e apt) = "(" ++ show e ++ " : " ++ show apt ++ ")"
 
 inferType :: forall x. Parseable x => Expr x -> TypedExpr x
 inferType e = TypedExpr e $ pType @x
@@ -171,6 +170,11 @@ reifyAPT :: forall x. Parseable x => APType -> Maybe (Proxy x)
 reifyAPT (APType p) = castable p where
   castable :: (Parseable a, Parseable b) => Proxy a -> Maybe (Proxy b)
   castable = cast
+
+data MaybeAPT = APT APType | Wildcard deriving (Eq)
+instance Show MaybeAPT where
+  show Wildcard = "?"
+  show (APT apt) = show apt
 
 data AParseable = forall x. Parseable x => AParseable x
 instance Show AParseable where show ap@(AParseable p) = show p ++ " : " ++ show (parseableType ap)
