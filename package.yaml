@@ -27,7 +27,6 @@ dependencies:
 - containers # Data.Map
 - mtl
 - template-haskell
-- list-t # also there is ListT
 
 library:
   source-dirs: src

@@ -113,6 +113,9 @@ help = "Available commands:\n" ++ (intercalate "\n" $ map ('\t':) $ [
   ":parseRPN <expression>",
   ":evalRPN <expression> -- evalScope scope <=< parseRPN",
   ":type <expression> -- show its type",
+  ":vars -- list all variables",
+  ":ops -- list all operators",
+  ":typedOps -- list all operators with type signature and fixity",
   ":help or :?"
   ]) ++ "\n"
 
