@@ -112,6 +112,9 @@ instance Eq AnOp where
       Nothing -> False
       Just refl -> gcastWith refl $ op == op'
 
+anOp :: Parseable y => Op y -> AnOp
+anOp = AnOp
+
 app :: MonadError Error me => Op y -> [AParseable] -> me y
 app op@(Op name pts fun _) ps
   | length ps /= arity op
@@ -145,14 +148,14 @@ codomain' (AnOp op) = codomain op
 
 -- short aliases for common ops, arity and signatures should be checked in `app`
 -- maybe use TH
-op1 :: Parseable a => Name -> APType -> (a -> y) -> Op y
-op1 name apt f = Op name [apt] f' (Prefix 1) where
+op1 :: forall a y. Parseable a => Name -> (a -> y) -> Op y
+op1 name f = Op name [pType @a] f' (Prefix 1) where
   f' [AParseable a] = f $ cast' a
-op2 :: (Parseable a, Parseable b) => Name -> APType -> APType -> (a -> b -> y) -> Fixity -> Op y
-op2 name apt1 apt2 f fixity = Op name [apt1,apt2] f' fixity where
+op2 :: forall a b y. (Parseable a, Parseable b) => Name -> (a -> b -> y) -> Fixity -> Op y
+op2 name f fixity = Op name [pType @a, pType @b] f' fixity where
   f' [AParseable a, AParseable b] = cast' a `f` cast' b
-op3 :: (Parseable a, Parseable b, Parseable c) => Name -> APType -> APType -> APType -> (a -> b -> c -> y) -> Op y
-op3 name apt1 apt2 apt3 f = Op name [apt1,apt2,apt3] f' (Prefix 3) where
+op3 :: forall a b c y. (Parseable a, Parseable b, Parseable c) => Name -> (a -> b -> c -> y) -> Op y
+op3 name f = Op name [pType @a, pType @b, pType @c] f' (Prefix 3) where
   f' [AParseable a, AParseable b, AParseable c] = f (cast' a) (cast' b) (cast' c)
 
 
@@ -199,16 +202,42 @@ reifyAP (AParseable p) = cast p
 cast' :: (Parseable x, Parseable y) => x -> y
 cast' = fromJust . cast
 
+eval :: forall x me. (Parseable x, MonadError Error me) => TypedExpr x -> me x
+eval = evalScope $ AParseable <$> defaultScope @x
+
 class (Typeable x, Eq x, Read x, Show x) => Parseable x where
   defaultScope :: Scope x
   defaultScope = mempty
-  eval :: MonadError Error me => TypedExpr x -> me x
-  eval = evalScope $ AParseable <$> defaultScope @x
+  defaultOpScope :: proxy x -> Scope AnOp
+  defaultOpScope _ = M.fromList $ map (name' &&& id) $ map anOp [
+    op2 @x @x "==" (==) (InfixL 6),
+    op2 @x @x "!=" (/=) (InfixL 6)
+    ] ++ map anOp [
+    op3 @Bool @x @x "ifThenElse" (\a b c -> if a then b else c)
+    ]
+  opScope :: proxy x -> Scope AnOp
+  opScope _ = mempty
 
 instance Parseable Double where
   defaultScope = M.fromList [
     ("e", exp 1),
     ("pi", pi)
+    ]
+  opScope _ = M.fromList $ map (name' &&& id) $ map (anOp :: Op Double -> AnOp) [
+    op2 "+" (+) (InfixL 6),
+    op2 "-" (-) (InfixL 6),
+    op2 "*" (*) (InfixL 7),
+    op2 "/" (/) (InfixL 7),
+    op2 "^" (**) (InfixR 8),
+    op1 "sqrt" sqrt,
+    op1 "~" negate,
+    op1 "sin" sin,
+    op1 "sinh" sinh,
+    op1 "cos" cos,
+    op1 "cosh" cosh,
+    op1 "exp" exp,
+    op1 "ln" log,
+    op2 "log" logBase (Prefix 2)
     ]
 
 instance Parseable Bool where
@@ -216,67 +245,30 @@ instance Parseable Bool where
     ("true", True),
     ("false", False)
     ]
+  opScope _ = M.fromList $ map (name' &&& id) $ map (anOp :: Op Bool -> AnOp) [
+    op2 "and" (&&) (InfixL 3),
+    op2 "&&" (&&) (InfixL 3),
+    op2 "or" (||) (InfixL 2),
+    op2 "||" (||) (InfixL 2),
+    op2 "xor" xor (InfixL 6),
+    op1 "not" not,
+    op1 "!" not,
+    op1 "~" not
+    ]
 
+-- TODO: add more generic Op domain
+genericOpScope :: Scope AnOp
+genericOpScope = M.fromList $ map (name' &&& id) $ map (anOp :: Op Bool -> AnOp) []
+  -- Op "===" [Wildcard, Wildcard] (\[a,b] -> a == b) (InfixL 6),
+  -- Op "!==" [Wildcard, Wildcard] (\[a,b] -> a /= b) (InfixL 6)
+  -- ]
 
-r :: APType
-r = pType @Double
-b :: APType
-b = pType @Bool
 -- maybe use TH
 parseableTypes :: [APType]
-parseableTypes = [r, b]
-
-funopD :: Name -> (Double -> Double) -> Op Double
-funopD name = op1 name r
-binopD :: Name -> (Double -> Double -> Double) -> Precedence -> Op Double
-binopD name rrr p = op2 name r r rrr (InfixL p)
-
-funopB :: Name -> (Bool -> Bool) -> Op Bool
-funopB name = op1 name b
-binopB :: Name -> (Bool -> Bool -> Bool) -> Precedence -> Op Bool
-binopB name bbb p = op2 name b b bbb (InfixL p)
-
--- TODO: allow general (==), etc.
-ops :: Scope AnOp
-ops = M.fromList $ map (name' &&& id) $ map generalize [
-  -- first list :: [Op Double]
-  binopD "+" (+) 6,
-  binopD "-" (-) 6,
-  binopD "*" (*) 7,
-  binopD "/" (/) 7,
-  op2 "^" r r (**) (InfixR 8),
-  funopD "sqrt" sqrt,
-  funopD "~" negate,
-  funopD "sin" sin,
-  funopD "sinh" sinh,
-  funopD "cos" cos,
-  funopD "cosh" cosh,
-  funopD "exp" exp,
-  funopD "ln" log,
-  op2 "log" r r logBase (Prefix 2),
-  op3 "ifThenElse" b r r (\a b c -> if a then b else c)
-  ] ++ map generalize [
-  -- second list :: [Op Bool]
-  op2 "==" r r ((==) :: Double -> Double -> Bool) (InfixL 6),
-  op2 "!=" r r ((/=) :: Double -> Double -> Bool) (InfixL 6),
-
-  binopB "and" (&&) 3,
-  binopB "&&" (&&) 3,
-  binopB "or" (||) 2,
-  binopB "||" (||) 2,
-  binopB "xor" xor 6,
-  binopB "==" (==) 6,
-  binopB "!=" (/=) 6,
-  funopB "not" not,
-  funopB "!" not,
-  funopB "~" not,
-  op3 "ifThenElse" b b b (\a b c -> if a then b else c)
-  ] where
-  generalize :: Parseable x => Op x -> AnOp
-  generalize = AnOp
+parseableTypes = [pType @Double, pType @Bool]
 
 opsFrom :: APType -> Scope AnOp
-opsFrom pt = M.filter sameFrom ops where
+opsFrom pt = M.filter sameFrom fullOpScope where
   sameFrom (AnOp op) = pt == domain op
 
 fullDefaultScope :: Scope AParseable
@@ -285,3 +277,8 @@ fullDefaultScope = mconcat $ map getDefaultScope parseableTypes where
   getDefaultScope (APType t) = getDefaultScope' t
   getDefaultScope' :: forall x. Parseable x => Proxy x -> Scope AParseable
   getDefaultScope' _ = AParseable <$> defaultScope @x
+
+fullOpScope :: Scope AnOp
+fullOpScope = genericOpScope `mappend` foldMap (\(APType t) -> opsOf t) parseableTypes where
+  opsOf :: Parseable x => Proxy x -> Scope AnOp
+  opsOf p = defaultOpScope p `mappend` opScope p

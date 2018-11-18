@@ -41,7 +41,7 @@ tokenize = go 1 . split where
   go n (w:ws)
     | w == "(" = go (10 * n) ws -- NOTE: skip "()", "(())", ...
     | w == ")" = if n `rem` 10 == 0 then go (n `quot` 10) ws else throwError "brackets doesn't match"
-    | otherwise = case M.lookup w ops of
+    | otherwise = case M.lookup w fullOpScope of
         Just op -> (O op (precedence' op * n) :) <$> go n ws
         Nothing -> (guessType w :) <$> go n ws
 
