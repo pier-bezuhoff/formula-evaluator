@@ -1,0 +1,90 @@
+-- This file has been generated from package.yaml by hpack version 0.28.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 12234818d75987ceca1f94b75e9e5907127eaaeb0978ff8a6f79884b8fcfe0f9
+
+name:           formula-evaluator
+version:        0.1.0.0
+synopsis:       Simple extensible formula parser and evaluator (with REPL)
+description:    Please see the README on GitHub at <https://github.com/pier-bezuhoff/formula-evaluator#readme>
+homepage:       https://github.com/pier-bezuhoff/formula-evaluator#readme
+bug-reports:    https://github.com/pier-bezuhoff/formula-evaluator/issues
+author:         Pier Bezuhov
+maintainer:     pierbezuhoff2016@gmail.com
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+extra-source-files:
+    ChangeLog.md
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/pier-bezuhoff/formula-evaluator
+
+library
+  exposed-modules:
+      Parseable
+      Parser
+      Interactive
+  other-modules:
+      Paths_formula_evaluator
+  hs-source-dirs:
+      src
+  ghc-options: -Wall
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , mtl
+    , template-haskell
+  default-language: Haskell2010
+
+executable formula-evaluator-exe
+  main-is: Main.hs
+  other-modules:
+      Interactive
+      Paths_formula_evaluator
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , formula-evaluator
+    , mtl
+    , template-haskell
+  default-language: Haskell2010
+
+executable formula-evaluator-repl-exe
+  main-is: REPL.hs
+  other-modules:
+      Interactive
+      Paths_formula_evaluator
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , formula-evaluator
+    , mtl
+    , template-haskell
+  default-language: Haskell2010
+
+test-suite formula-evaluator-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_formula_evaluator
+  hs-source-dirs:
+      test
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , formula-evaluator
+    , mtl
+    , template-haskell
+  default-language: Haskell2010

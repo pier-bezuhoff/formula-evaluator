@@ -1,4 +1,4 @@
-import Parser (repl)
+import Interactive (repl)
 
 main :: IO ()
 main = repl
